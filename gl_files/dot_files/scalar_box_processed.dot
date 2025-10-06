@@ -1,0 +1,23 @@
+digraph scalar_box{
+    num = "1";
+    overall_factor = "1";
+    projector = "1";
+
+	A [dod=0 int_id=V_3_SCALAR_011 num="UFO::SCALAR_COUPLING"];
+	B [dod=0 int_id=V_3_SCALAR_011 num="UFO::SCALAR_COUPLING"];
+	C [dod=0 int_id=V_3_SCALAR_011 num="UFO::SCALAR_COUPLING"];
+	D [dod=0 int_id=V_3_SCALAR_011 num="UFO::SCALAR_COUPLING"];
+	exte0	 [style=invis];
+	exte0	-> A:1	 [id=0 dir=none sink=0  dod=-2 is_dummy=false lmb_rep="P(1,a___)" name=e0 num="1𝑖" particle="scalar_0"];
+	exte1	 [style=invis];
+	exte1	-> B:2	 [id=1 dir=none sink=0  dod=-2 is_dummy=false lmb_rep="P(2,a___)" name=e1 num="1𝑖" particle="scalar_0"];
+	exte2	 [style=invis];
+	C:3	-> exte2	 [id=2 dir=none source=0  dod=-2 is_dummy=false lmb_rep="P(3,a___)" name=e2 num="1𝑖" particle="scalar_0"];
+	exte3	 [style=invis];
+	D:0	-> exte3	 [id=3 dir=none source=0  dod=-2 is_dummy=false lmb_rep="P(1,a___)+P(2,a___)-P(3,a___)" name=e3 num="1𝑖" particle="scalar_0"];
+	A:4	-> B:5	 [id=4 dir=none source=1 sink=1  dod=-2 is_dummy=false lmb_rep="-P(2,a___)+P(3,a___)+K(0,a___)" name=e4 num="1" particle="scalar_1"];
+	B:6	-> C:7	 [id=5 dir=none source=2 sink=1  dod=-2 is_dummy=false lmb_rep="P(3,a___)+K(0,a___)" name=e5 num="1" particle="scalar_1"];
+	C:8	-> D:9	 [id=6 dir=none source=2 sink=1  dod=-2 is_dummy=false lmb_id=0 lmb_rep="K(0,a___)" name=e6 num="1" particle="scalar_1"];
+	D:10	-> A:11	 [id=7 dir=none source=2 sink=2  dod=-2 is_dummy=false lmb_rep="-P(1,a___)-P(2,a___)+P(3,a___)+K(0,a___)" name=e7 num="1" particle="scalar_1"];
+}
+
