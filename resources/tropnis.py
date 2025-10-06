@@ -5,11 +5,10 @@ import momtrop
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import pydot
 import numpy as np
 
-from symbolica import E, S, Expression
 from madnis.nn import Flow
+from resources.parser import RunCardParser
 
 
 class MaskedMLP(nn.Module):
@@ -203,16 +202,6 @@ class SampleBatch:
     func_val: torch.Tensor
 
 
-@dataclass
-class MomtropSamplerProperties:
-    edge_weights: list[int]
-    edge_masses: list[int]
-    edges: list[momtrop.Edge]
-    external_vertices: list[int]
-    signature: list[list[int]]
-    momentum_shifts: list[momtrop.Vector]
-
-
 class TriangleIntegrand:
     continuous_dim = 7
     discrete_dims = [3, 3]
@@ -282,9 +271,9 @@ def test_numerator(loop_momenta: np.ndarray) -> np.ndarray:
 
 
 class MomtropIntegrand:
-    def __init__(self, dot_file: str, numerator: callable):
-        self.sampler, self.sampler_properties = self._generate_momtrop_sampler_from_dot_file(
-            dot_file)
+    def __init__(self, runcard_file: str, numerator: callable):
+        Parser = RunCardParser(runcard_file)
+        self.sampler, self.sampler_properties = Parser.generate_momtrop_sampler_from_dot_file()
         self.edge_data = momtrop.EdgeData(
             self.sampler_properties.edge_masses,
             self.sampler_properties.momentum_shifts)
@@ -292,123 +281,6 @@ class MomtropIntegrand:
         self.continuous_dim = self.sampler.get_dimension()
         self.discrete_dims = self.get_discrete_dims()
         self.numerator = numerator
-
-    def _generate_momtrop_sampler_from_dot_file(self, dot_file: str):
-        # Scalar particle properties
-        scalars = {
-            "scalar_0": {"mass": 0.},
-            "scalar_1": {"mass": 0.02},
-            "scalar_2": {"mass": 2.}
-        }
-        # External momenta
-        ext_momenta = [
-            [0.005, 0.0, 0.0, 0.005],
-            [0.005, 0.0, 0.0, -0.005],
-            [0.09903067841547669,
-             0.03734458315384239,
-             0.06393671561700484,
-             -0.0657613394982612]
-        ]
-        # Import the dot graph
-        graph = pydot.graph_from_dot_file(dot_file)[0]
-        edges = graph.get_edges()
-        vertices = graph.get_nodes()
-
-        VERTICES = []
-        LMB_EDGES = []
-        EXT_VERTICES = []
-        INT_EDGES = []
-
-        # Filter out the external vertices
-        for vert in vertices:
-            if vert.get("num") is not None:
-                VERTICES.append(vert)
-
-        # Add vertex ID for momtrop
-        for v_id, vert in enumerate(VERTICES):
-            vert.set("v_id", v_id)
-
-        # Filter edges and add additional attributes for momtrop
-        for edge in edges:
-            edge.set("src", edge.get_source().split(':')[0])
-            edge.set("dst", edge.get_destination().split(':')[0])
-
-            if edge.get("lmb_id") is not None:
-                LMB_EDGES.append(edge)
-
-            if edge.get("source") is None:
-                EXT_VERTICES.append(graph.get_node(edge.get("dst"))[0])
-            elif edge.get("sink") is None:
-                EXT_VERTICES.append(graph.get_node(edge.get("src"))[0])
-            else:
-                INT_EDGES.append(edge)
-                particle = edge.get("particle")[1:-1]
-                edge.set("mass", scalars.get(particle).get("mass"))
-                src_vert = graph.get_node(edge.get("src"))[0]
-                dst_vert = graph.get_node(edge.get("dst"))[0]
-                edge.set("src_id", src_vert.get("v_id"))
-                edge.set("dst_id", dst_vert.get("v_id"))
-
-        # Symbolica setup for LMB representation parsing
-        # P: External momenta
-        # K: Internal momenta
-        # x_, a_: wildcards
-        P, K = S('P', 'K')
-        x_, a_ = S('x_', 'a_')
-
-        # Set up momtrop sampler
-        TOLERANCE = 1E-10
-        n_loops = len(LMB_EDGES)
-        n_int = len(INT_EDGES)
-        n_ext = len(edges) - n_int
-        mt_weight = (3*n_loops + 3/2)/n_int/2
-
-        mt_edges = []
-        mt_masses = []
-        mt_signature = []
-        mt_offsets = []
-        mt_externals = sorted([v.get("v_id") for v in EXT_VERTICES])
-
-        for edge in INT_EDGES:
-            # Generate the momtrop edge
-            src_id = edge.get("src_id")
-            dst_id = edge.get("dst_id")
-            mass = edge.get("mass")
-            mt_edges.append(
-                momtrop.Edge((src_id, dst_id), mass > TOLERANCE, mt_weight)
-            )
-            mt_masses.append(mass)
-
-            # LMB representation parsing
-            e: Expression = E(edge.get("lmb_rep")[1:-1])
-            e = e.replace(P(x_, a_), P(x_-1))
-            e = e.replace(K(x_, a_), K(x_))
-            lmb_sig = [int(e.coefficient(K(lmb_id)).to_sympy())
-                       for lmb_id in range(n_loops)]
-            mt_signature.append(lmb_sig)
-
-            offset_sig = [float(e.coefficient(P(ext_id)).to_sympy())
-                          for ext_id in range(n_ext - 1)]
-            offset = [0. for _ in range(3)]
-            for coeff, ext_mom in zip(offset_sig, ext_momenta):
-                for i in range(3):
-                    offset[i] += coeff*ext_mom[i+1]
-
-            mt_offsets.append(momtrop.Vector(*offset))
-
-        assym_graph = momtrop.Graph(mt_edges, mt_externals)
-        sampler = momtrop.Sampler(assym_graph, mt_signature)
-
-        sampler_properties = MomtropSamplerProperties(
-            edge_weights=mt_weight,
-            edge_masses=mt_masses,
-            edges=mt_edges,
-            external_vertices=mt_externals,
-            signature=mt_signature,
-            momentum_shifts=mt_offsets,
-        )
-
-        return sampler, sampler_properties
 
     def get_discrete_dims(self) -> list[int]:
         # TODO: Implement for arbitrary diagrams
@@ -421,7 +293,6 @@ class MomtropIntegrand:
         return torch.tensor(rust_result)
 
     def get_subgraph_from_edges_removed(self, edges_removed: list[int]) -> list[int]:
-        # TODO: implement this for arbitrary diagrams
         edges = list(range(len(self.sampler_properties.edges)))
         result = []
 

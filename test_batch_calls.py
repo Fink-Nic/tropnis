@@ -18,7 +18,7 @@ def triangle_numerator(loop_momenta: np.ndarray) -> np.ndarray:
 
 torch.set_default_dtype(torch.float64)
 integrand = MomtropIntegrand(
-    "gl_files/dot_files/triangle_processed.dot", triangle_numerator)
+    "gl_files/runcards/test_triangle_runcard.toml", triangle_numerator)
 integrator = TropicalIntegrator(integrand, batch_size=1024)
 
 n_train = 50
