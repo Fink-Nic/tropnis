@@ -31,7 +31,7 @@ class RunCardParser:
         with open(self.model_path, 'r') as f:
             self.model = json.load(f)
 
-    def get_particle_property(self, particle_name: str, parameter_name: str):
+    def get_particle_parameter(self, particle_name: str, parameter_name: str):
         particle_match = None
         for particle in self.model['particles']:
             try:
