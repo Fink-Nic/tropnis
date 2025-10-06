@@ -67,3 +67,7 @@ max_prob_ratio = 0.01
 [tropnis_settings]
 processed_dot_file = "/home/nic/Master/tropnis/gl_files/dot_files/scalar_box_processed.dot"
 model_json_file = "/home/nic/Master/tropnis/gl_files/models/scalars.json"
+evaluate_real_part = true
+gammaloop_state = "scalar_box"
+gammaloop_process_id = 0
+gammaloop_integrand_name = "default"

@@ -1,11 +1,11 @@
 # type: ignore
 from dataclasses import dataclass
-import momtrop
+import momtrop_nic as momtrop
 import pydot
 import json
 import toml
 import os
-
+import gammaloop
 from symbolica import E, S, Expression
 
 
@@ -30,6 +30,22 @@ class RunCardParser:
         self.dot_graph = pydot.graph_from_dot_file(self.dot_path)[0]
         with open(self.model_path, 'r') as f:
             self.model = json.load(f)
+
+    def get_gl_integrand(self) -> callable:
+        def gammaloop_integrand(loop_momenta: np.ndarray) -> np.ndarray:
+            state = gammaloop.GammaLoopState(self.tropnis_settings['gammaloop_state'])
+            points = state.batched_inspect(
+                points=loop_momenta.reshape(-1, 3), momentum_space=True, 
+                process_id=self.tropnis_settings['gammaloop_process_id'], 
+                integrand_name=self.tropnis_settings['gammaloop_integrand_name'], 
+                use_f128=False,  discrete_dims=np.array([[0], [0]], dtype=np.uint64)
+            )
+            if self.tropnis_settings['evaluate_real_part']:
+                return points.real
+            
+            return points.imag
+
+        return gammaloop_integrand
 
     def get_particle_parameter(self, particle_name: str, parameter_name: str):
         particle_match = None

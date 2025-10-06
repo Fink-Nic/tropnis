@@ -1,7 +1,7 @@
 # type: ignore
 from dataclasses import dataclass
 import math
-import momtrop
+import momtrop_nic as momtrop
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -271,7 +271,7 @@ def test_numerator(loop_momenta: np.ndarray) -> np.ndarray:
 
 
 class MomtropIntegrand:
-    def __init__(self, runcard_file: str, numerator: callable):
+    def __init__(self, runcard_file: str, integrand: callable | None = None):
         Parser = RunCardParser(runcard_file)
         self.sampler, self.sampler_properties = Parser.generate_momtrop_sampler_from_dot_file()
         self.edge_data = momtrop.EdgeData(
@@ -280,7 +280,10 @@ class MomtropIntegrand:
         self.settings = momtrop.Settings(False, False)
         self.continuous_dim = self.sampler.get_dimension()
         self.discrete_dims = self.get_discrete_dims()
-        self.numerator = numerator
+        if numerator is None:
+            self.integrand = Parser.get_gl_integrand()
+        else:
+            self.integrand = integrand
 
     def get_discrete_dims(self) -> list[int]:
         # TODO: Implement for arbitrary diagrams

@@ -11,17 +11,17 @@ import numpy as np
 from datetime import datetime
 from enum import StrEnum
 from resources.tropnis import SampleBatch, TriangleIntegrand, TropicalFlow, Cache
-from triangle import ltd_triangle, prop_factor
+# from triangle import ltd_triangle, prop_factor
 
-
+# -------------------------
 # Integrand functions
-def const_f(m_psi: float, k: list[float], q: list[float], p: list[float], weight: float) -> float:
-    return prop_factor(m_psi, k, q, p, weight)
-
-
-def triangle_f(m_psi: float, k: list[float], q: list[float], p: list[float], weight: float) -> float:
-    return ltd_triangle(m_psi, k, q, p, weight) / 8.
-
+#def const_f(m_psi: float, k: list[float], q: list[float], p: list[float], weight: float) -> float:
+#    return prop_factor(m_psi, k, q, p, weight)
+#
+#
+# def triangle_f(m_psi: float, k: list[float], q: list[float], p: list[float], weight: float) -> float:
+#    return ltd_triangle(m_psi, k, q, p, weight) / 8.
+#--------------------------
 
 # Logging related setup
 class Colour(StrEnum):
