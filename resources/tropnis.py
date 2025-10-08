@@ -1,7 +1,8 @@
 # type: ignore
 from dataclasses import dataclass
+from typing import Callable
 import math
-import momtrop_nic as momtrop
+import momtrop
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -266,12 +267,12 @@ class TriangleIntegrand:
         return torch.tensor(result)
 
 
-def test_numerator(loop_momenta: np.ndarray) -> np.ndarray:
+def test_integrand(loop_momenta: np.ndarray) -> np.ndarray:
     return np.ones_like(loop_momenta, shape=loop_momenta.shape[0])
 
 
 class MomtropIntegrand:
-    def __init__(self, runcard_file: str, integrand: callable | None = None):
+    def __init__(self, runcard_file: str, integrand: Callable | None = None):
         Parser = RunCardParser(runcard_file)
         self.sampler, self.sampler_properties = Parser.generate_momtrop_sampler_from_dot_file()
         self.edge_data = momtrop.EdgeData(
@@ -280,7 +281,7 @@ class MomtropIntegrand:
         self.settings = momtrop.Settings(False, False)
         self.continuous_dim = self.sampler.get_dimension()
         self.discrete_dims = self.get_discrete_dims()
-        if numerator is None:
+        if integrand is None:
             self.integrand = Parser.get_gl_integrand()
         else:
             self.integrand = integrand
@@ -321,7 +322,7 @@ class MomtropIntegrand:
             ind + self.get_subgraph_from_edges_removed(ind) for ind in indices]
         loop_momenta, jacs = self.momtrop_parameterize_batch(xs, force_sector)
 
-        return self.numerator(loop_momenta)*jacs
+        return self.integrand(loop_momenta)*jacs
 
     def __call__(self, indices: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         result = self.integrate_batch(x.tolist(), indices.tolist())
@@ -330,7 +331,7 @@ class MomtropIntegrand:
 
 
 class TropicalIntegrator:
-    def __init__(self, integrand, lr=3e-4, batch_size=1024, continuous_kwargs={}, discrete_kwargs={}):
+    def __init__(self, integrand, lr=1e-3, batch_size=1024, continuous_kwargs={}, discrete_kwargs={}):
         self.integrand = integrand
         self.flow = TropicalFlow(
             continuous_dim=integrand.continuous_dim,

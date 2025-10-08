@@ -1,11 +1,12 @@
 # type: ignore
 from dataclasses import dataclass
-import momtrop_nic as momtrop
+import momtrop
 import pydot
 import json
 import toml
 import os
 import gammaloop
+import numpy as np
 from symbolica import E, S, Expression
 
 
@@ -33,17 +34,19 @@ class RunCardParser:
 
     def get_gl_integrand(self) -> callable:
         def gammaloop_integrand(loop_momenta: np.ndarray) -> np.ndarray:
+            discrete_dims = np.array(loop_momenta.shape[0]*[[0]], dtype=np.uint64)
+            loop_momenta = loop_momenta.reshape(-1, 3)
             state = gammaloop.GammaLoopState(self.tropnis_settings['gammaloop_state'])
-            points = state.batched_inspect(
-                points=loop_momenta.reshape(-1, 3), momentum_space=True, 
+            res, jac = state.batched_inspect(
+                points=loop_momenta, momentum_space=True, 
                 process_id=self.tropnis_settings['gammaloop_process_id'], 
                 integrand_name=self.tropnis_settings['gammaloop_integrand_name'], 
-                use_f128=False,  discrete_dims=np.array([[0], [0]], dtype=np.uint64)
+                use_f128=False,  discrete_dims=discrete_dims
             )
             if self.tropnis_settings['evaluate_real_part']:
-                return points.real
+                return res.real * jac
             
-            return points.imag
+            return res.imag * jac
 
         return gammaloop_integrand
 
@@ -86,6 +89,13 @@ class RunCardParser:
     def generate_momtrop_sampler_from_dot_file(self) -> tuple[momtrop.Sampler, MomtropSamplerProperties]:
         # External momenta
         ext_momenta = self.runcard['default_runtime_settings']['kinematics']['externals']['data']['momenta']
+        infered_momentum = 4*[0.]
+        for momentum, sig in zip(ext_momenta, [-1 ,1, 1]):
+            infered_momentum[0] += sig*momentum[0]
+            infered_momentum[1] += sig*momentum[1]
+            infered_momentum[2] += sig*momentum[2]
+            infered_momentum[3] += sig*momentum[3]
+        ext_momenta.append(infered_momentum)
         # Import the dot graph
         graph = self.dot_graph
         edges = graph.get_edges()
@@ -120,7 +130,7 @@ class RunCardParser:
             else:
                 INT_EDGES.append(edge)
                 particle = edge.get('particle')[1:-1]
-                edge.set('mass', self.get_particle_property(
+                edge.set('mass', self.get_particle_parameter(
                     particle, 'mass')[0])
                 src_vert = graph.get_node(edge.get('src'))[0]
                 dst_vert = graph.get_node(edge.get('dst'))[0]
@@ -159,23 +169,44 @@ class RunCardParser:
 
             # LMB representation parsing
             e: Expression = E(edge.get('lmb_rep')[1:-1])
-            e = e.replace(P(x_, a_), P(x_-1))
+            e = e.replace(P(x_, a_), P(x_))
             e = e.replace(K(x_, a_), K(x_))
             lmb_sig = [int(e.coefficient(K(lmb_id)).to_sympy())
                        for lmb_id in range(n_loops)]
             mt_signature.append(lmb_sig)
 
             offset_sig = [float(e.coefficient(P(ext_id)).to_sympy())
-                          for ext_id in range(n_ext - 1)]
+                          for ext_id in range(n_ext)]
+            print(f"{offset_sig=}")
             offset = [0. for _ in range(3)]
             for coeff, ext_mom in zip(offset_sig, ext_momenta):
                 for i in range(3):
                     offset[i] += coeff*ext_mom[i+1]
+            
+            print(f"{offset=}")
 
             mt_offsets.append(momtrop.Vector(*offset))
 
         assym_graph = momtrop.Graph(mt_edges, mt_externals)
         sampler = momtrop.Sampler(assym_graph, mt_signature)
+
+        print("-------------- PARSED MOMTROP SAMPLER ---------------")
+        print(f"{ext_momenta=}")
+        print(f"{mt_masses=}")
+        print(f"{mt_signature=}")
+        print(f"{mt_externals=}")
+        print(f"{offset_sig=}")
+        print(f"{mt_offsets=}")
+        print(f"------------------ INTERNAL EDGES ------------------")
+        for edge in INT_EDGES:
+            print(edge.to_string())
+        print(f"-------------------- LMB EDGES ---------------------")
+        for edge in LMB_EDGES:
+            print(edge.to_string())
+        print(f"----------------- EXTERNAL VERTICES ----------------")
+        for vert in EXT_VERTICES:
+            print(vert.to_string())
+
 
         sampler_properties = MomtropSamplerProperties(
             edge_weights=mt_weight,

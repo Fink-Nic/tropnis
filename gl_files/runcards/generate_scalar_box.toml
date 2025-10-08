@@ -1,6 +1,6 @@
 #:schema https://raw.githubusercontent.com/alphal00p/gammaloop/refs/heads/hedge_numerator/assets/schemas/runhistory.json
 commands = [
-    "import model scalars-default.json",
+    "import model scalars.json",
     "import amplitude ./scalar_box.dot",
     "generate",
 	"quit"
@@ -65,9 +65,9 @@ continuous_dim_learning_rate = 1.5
 max_prob_ratio = 0.01
 
 [tropnis_settings]
-processed_dot_file = "/home/nic/Master/tropnis/gl_files/dot_files/scalar_box_processed.dot"
-model_json_file = "/home/nic/Master/tropnis/gl_files/models/scalars.json"
+processed_dot_file = "/shared/vhirshi/nic/tropnis/gl_files/dot_files/scalar_box_processed.dot"
+model_json_file = "/shared/vhirshi/gammaloop_hedge_numerator/models/json/scalars/scalars.json"
 evaluate_real_part = true
-gammaloop_state = "scalar_box"
+gammaloop_state = "/shared/vhirshi/gammaloop_hedge_numerator/scalar_box_output"
 gammaloop_process_id = 0
 gammaloop_integrand_name = "default"
