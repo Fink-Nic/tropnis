@@ -19,14 +19,16 @@ n_samples = 100000
 target_int = 0.0010449992991079754
 target_err = 5.673200100564505E-7
 
+
 def triangle_integrand(loop_momenta: np.ndarray) -> np.ndarray:
     result = [ltd_triangle(m_psi, k.tolist(), q, p, 0.5) for k in loop_momenta]
 
     return np.array(result)
 
+
 torch.set_default_dtype(torch.float64)
 integrand = MomtropIntegrand(
-    "/shared/vhirshi/nic/tropnis/gl_files/runcards/generate_scalar_box.toml")
+    "gl_files/runcards/test_triangle_runcard.toml", triangle_integrand)
 integrator = TropicalIntegrator(integrand, batch_size=1024)
 
 int_momtrop, err_momtrop = integrator.integrate(n_samples)
@@ -38,11 +40,11 @@ print(f"Momtrop Result (before training):     {
 
 if n_train == 0:
     quit()
-    
+
 integrator.train(n_train, n_log)
 int_flow, err_flow = integrator.integrate(n_samples)
 rsd_flow = err_flow / int_flow * math.sqrt(n_samples)
 print(f"Trained Result:     {
     int_flow:.8f} +- {err_flow:.8f}, RSD = {rsd_flow:.2f}")
 print(f"Gammaloop Result:    {
-target_int:.8f} +- {target_err:.8f}")
+    target_int:.8f} +- {target_err:.8f}")

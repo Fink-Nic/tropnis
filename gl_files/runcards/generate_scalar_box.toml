@@ -65,8 +65,29 @@ continuous_dim_learning_rate = 1.5
 max_prob_ratio = 0.01
 
 [tropnis_settings]
-processed_dot_file = "/shared/vhirshi/nic/tropnis/gl_files/dot_files/scalar_box_processed.dot"
-model_json_file = "/shared/vhirshi/gammaloop_hedge_numerator/models/json/scalars/scalars.json"
+momenta = [
+    [
+        0.1,
+        0.0,
+        0.0,
+        0.1,
+    ],
+    [
+        0.1,
+        0.0,
+        0.0,
+        -0.1,
+    ],
+    [
+        0.09903067841547669,
+        0.03734458315384239,
+        0.06393671561700484,
+        -0.0657613394982612,
+    ],
+]
+dependent_momentum_index = -1
+processed_dot_file = "gl_files/dot_files/scalar_box_processed.dot"
+model_json_file = "gl_files/models/scalars.json"
 evaluate_real_part = true
 gammaloop_state = "/shared/vhirshi/gammaloop_hedge_numerator/scalar_box_output"
 gammaloop_process_id = 0

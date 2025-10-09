@@ -5,7 +5,7 @@ import pydot
 import json
 import toml
 import os
-import gammaloop
+# import gammaloop
 import numpy as np
 from symbolica import E, S, Expression
 
@@ -32,23 +32,25 @@ class RunCardParser:
         with open(self.model_path, 'r') as f:
             self.model = json.load(f)
 
-    def get_gl_integrand(self) -> callable:
-        def gammaloop_integrand(loop_momenta: np.ndarray) -> np.ndarray:
-            discrete_dims = np.array(loop_momenta.shape[0]*[[0]], dtype=np.uint64)
-            loop_momenta = loop_momenta.reshape(-1, 3)
-            state = gammaloop.GammaLoopState(self.tropnis_settings['gammaloop_state'])
-            res, jac = state.batched_inspect(
-                points=loop_momenta, momentum_space=True, 
-                process_id=self.tropnis_settings['gammaloop_process_id'], 
-                integrand_name=self.tropnis_settings['gammaloop_integrand_name'], 
-                use_f128=False,  discrete_dims=discrete_dims
-            )
-            if self.tropnis_settings['evaluate_real_part']:
-                return res.real * jac
-            
-            return res.imag * jac
+    # def get_gl_integrand(self) -> callable:
+    #     def gammaloop_integrand(loop_momenta: np.ndarray) -> np.ndarray:
+    #         discrete_dims = np.array(
+    #             loop_momenta.shape[0]*[[0]], dtype=np.uint64)
+    #         loop_momenta = loop_momenta.reshape(-1, 3)
+    #         state = gammaloop.GammaLoopState(
+    #             self.tropnis_settings['gammaloop_state'])
+    #         res, jac = state.batched_inspect(
+    #             points=loop_momenta, momentum_space=True,
+    #             process_id=self.tropnis_settings['gammaloop_process_id'],
+    #             integrand_name=self.tropnis_settings['gammaloop_integrand_name'],
+    #             use_f128=False,  discrete_dims=discrete_dims
+    #         )
+    #         if self.tropnis_settings['evaluate_real_part']:
+    #             return res.real * jac
 
-        return gammaloop_integrand
+    #         return res.imag * jac
+
+    #     return gammaloop_integrand
 
     def get_particle_parameter(self, particle_name: str, parameter_name: str):
         particle_match = None
@@ -89,13 +91,9 @@ class RunCardParser:
     def generate_momtrop_sampler_from_dot_file(self) -> tuple[momtrop.Sampler, MomtropSamplerProperties]:
         # External momenta
         ext_momenta = self.runcard['default_runtime_settings']['kinematics']['externals']['data']['momenta']
-        infered_momentum = 4*[0.]
-        for momentum, sig in zip(ext_momenta, [-1 ,1, 1]):
-            infered_momentum[0] += sig*momentum[0]
-            infered_momentum[1] += sig*momentum[1]
-            infered_momentum[2] += sig*momentum[2]
-            infered_momentum[3] += sig*momentum[3]
-        ext_momenta.append(infered_momentum)
+        n_ext_mom = len(ext_momenta) + 1
+        external_sigs = n_ext_mom*[0.]
+
         # Import the dot graph
         graph = self.dot_graph
         edges = graph.get_edges()
@@ -117,16 +115,23 @@ class RunCardParser:
 
         # Filter edges and add additional attributes for momtrop
         for edge in edges:
-            edge.set('src', edge.get_source().split(':')[0])
-            edge.set('dst', edge.get_destination().split(':')[0])
+            src_split = edge.get_source().split(':')
+            dst_split = edge.get_destination().split(':')
+            edge.set('src', src_split[0])
+            edge.set('dst', dst_split[0])
 
             if edge.get('lmb_id') is not None:
                 LMB_EDGES.append(edge)
 
             if edge.get('source') is None:
+                # Incoming external momentum
                 EXT_VERTICES.append(graph.get_node(edge.get("dst"))[0])
+                external_sigs[int(dst_split[1])] = 1
+
             elif edge.get('sink') is None:
+                # Outgoing external momentum
                 EXT_VERTICES.append(graph.get_node(edge.get("src"))[0])
+                external_sigs[int(src_split[1])] = -1
             else:
                 INT_EDGES.append(edge)
                 particle = edge.get('particle')[1:-1]
@@ -137,6 +142,29 @@ class RunCardParser:
                 edge.set('src_id', src_vert.get('v_id'))
                 edge.set('dst_id', dst_vert.get('v_id'))
 
+        # Infering the dependent momentum from momentum conservation
+        print(f"{external_sigs=}")
+        dmi = self.tropnis_settings['dependent_momentum_index'] % n_ext_mom
+        dm_sig = external_sigs[dmi]
+        print(f"{dm_sig=}")
+        dependent_momentum = 4*[0.]
+        exclusive_external_sigs = external_sigs[:dmi] + external_sigs[dmi+1:]
+        for momentum, sig in zip(ext_momenta, exclusive_external_sigs):
+            dependent_momentum[0] -= dm_sig*sig*momentum[0]
+            dependent_momentum[1] -= dm_sig*sig*momentum[1]
+            dependent_momentum[2] -= dm_sig*sig*momentum[2]
+            dependent_momentum[3] -= dm_sig*sig*momentum[3]
+        print(f"{dependent_momentum=}")
+        ext_momenta = ext_momenta[:dmi] + \
+            [dependent_momentum] + ext_momenta[dmi:]
+
+        test_mom_cons = 4*[0.]
+        for momentum, sig in zip(ext_momenta, external_sigs):
+            dependent_momentum[0] = sig*momentum[0]
+            dependent_momentum[1] = sig*momentum[1]
+            dependent_momentum[2] = sig*momentum[2]
+            dependent_momentum[3] = sig*momentum[3]
+        print(f"{test_mom_cons=} SHOULD BE ZERO!")
         # Symbolica setup for LMB representation parsing
         # P: External momenta
         # K: Internal momenta
@@ -147,9 +175,8 @@ class RunCardParser:
         # Set up momtrop sampler
         TOLERANCE = 1E-10
         n_loops = len(LMB_EDGES)
-        n_int = len(INT_EDGES)
-        n_ext = len(edges) - n_int
-        mt_weight = (3*n_loops + 3/2)/n_int/2
+        n_int_edges = len(INT_EDGES)
+        mt_weight = (3*n_loops + 3/2)/n_int_edges/2
 
         mt_edges = []
         mt_masses = []
@@ -176,13 +203,13 @@ class RunCardParser:
             mt_signature.append(lmb_sig)
 
             offset_sig = [float(e.coefficient(P(ext_id)).to_sympy())
-                          for ext_id in range(n_ext)]
+                          for ext_id in range(n_ext_mom)]
             print(f"{offset_sig=}")
             offset = [0. for _ in range(3)]
             for coeff, ext_mom in zip(offset_sig, ext_momenta):
                 for i in range(3):
                     offset[i] += coeff*ext_mom[i+1]
-            
+
             print(f"{offset=}")
 
             mt_offsets.append(momtrop.Vector(*offset))
@@ -197,16 +224,15 @@ class RunCardParser:
         print(f"{mt_externals=}")
         print(f"{offset_sig=}")
         print(f"{mt_offsets=}")
-        print(f"------------------ INTERNAL EDGES ------------------")
-        for edge in INT_EDGES:
-            print(edge.to_string())
-        print(f"-------------------- LMB EDGES ---------------------")
-        for edge in LMB_EDGES:
-            print(edge.to_string())
-        print(f"----------------- EXTERNAL VERTICES ----------------")
-        for vert in EXT_VERTICES:
-            print(vert.to_string())
-
+        # print(f"------------------ INTERNAL EDGES ------------------")
+        # for edge in INT_EDGES:
+        #     print(edge.to_string())
+        # print(f"-------------------- LMB EDGES ---------------------")
+        # for edge in LMB_EDGES:
+        #     print(edge.to_string())
+        # print(f"----------------- EXTERNAL VERTICES ----------------")
+        # for vert in EXT_VERTICES:
+        #     print(vert.to_string())
 
         sampler_properties = MomtropSamplerProperties(
             edge_weights=mt_weight,

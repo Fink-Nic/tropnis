@@ -2,3 +2,4 @@
 *.toml
 gl_integrand_test.py
 symbolica_scalar_box.py
+outputs/
