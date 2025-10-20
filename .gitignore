@@ -3,3 +3,5 @@
 gl_integrand_test.py
 symbolica_scalar_box.py
 outputs/
+*.Identifier
+symbolica_scalar_box_v2.py
