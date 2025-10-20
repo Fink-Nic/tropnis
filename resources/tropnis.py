@@ -1,16 +1,39 @@
 # type: ignore
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Sequence, List, Tuple
 import math
 import momtrop
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+from multiprocessing import Process, Manager, Queue
 
 from madnis.nn import Flow
+from madnis.integrator import Integrand as MadnisIntegrand
 from resources.parser import RunCardParser
 
+
+def test_integrand(loop_momenta: np.ndarray) -> np.ndarray:
+    return np.ones_like(loop_momenta, shape=loop_momenta.shape[0])
+
+
+def chunks(ary: Sequence, n_chunks: int) -> List[Sequence]:
+    l = len(ary)
+    if n_chunks > l or n_chunks < 1:
+        raise ValueError("the number of chunks should be at least 1, and at most len(ary)")
+    n_long = l % n_chunks
+    len_long = l // n_chunks + 1
+    total_long = n_long*len_long
+    len_short = l // n_chunks
+
+    long_chunks = [ ary[start:start+len_long] 
+                   for start in range(0, total_long, len_long) ]
+    short_chunks = [ ary[start:start+len_short] 
+                    for start in range(total_long, l, len_short) ]
+    
+    return long_chunks + short_chunks
+    
 
 class MaskedMLP(nn.Module):
     def __init__(
@@ -104,7 +127,7 @@ class MaskedMLP(nn.Module):
         return x, new_cache
 
 
-Cache = tuple[torch.Tensor, list[torch.Tensor] | None]
+Cache = tuple[torch.Tensor, List[torch.Tensor] | None]
 
 
 class TropicalFlow(nn.Module):
@@ -267,13 +290,14 @@ class TriangleIntegrand:
         return torch.tensor(result)
 
 
-def test_integrand(loop_momenta: np.ndarray) -> np.ndarray:
-    return np.ones_like(loop_momenta, shape=loop_momenta.shape[0])
-
-
 class MomtropIntegrand:
-    def __init__(self, runcard_file: str, integrand: Callable | None = None):
-        Parser = RunCardParser(runcard_file)
+    def __init__(self, 
+    runcard_file: str, 
+    integrand: Callable[[np.ndarray], np.ndarray] | None = None, 
+    n_cores: int | None = None,
+    parser_verbosity: bool = False,
+    ):
+        Parser = RunCardParser(runcard_file, parser_verbosity)
         self.sampler, self.sampler_properties = Parser.generate_momtrop_sampler_from_dot_file()
         self.edge_data = momtrop.EdgeData(
             self.sampler_properties.edge_masses,
@@ -285,8 +309,15 @@ class MomtropIntegrand:
             self.integrand = Parser.get_gl_integrand()
         else:
             self.integrand = integrand
+        if n_cores is None:
+            try:
+                self.n_cores = Parser.settings['n_cores']
+            except KeyError:
+                self.n_cores = 1
+        else:
+            self.n_cores = n_cores
 
-    def get_discrete_dims(self) -> list[int]:
+    def get_discrete_dims(self) -> List[int]:
         # TODO: Implement for arbitrary diagrams
         num_edges = len(self.sampler_properties.edges)
         return num_edges*[num_edges]
@@ -295,8 +326,12 @@ class MomtropIntegrand:
         rust_result = self.sampler.predict_discrete_probs(indices.tolist())
 
         return torch.tensor(rust_result)
+    
+    def madnis_predict_discrete_probs(self, indices: torch.Tensor, dim: int) -> torch.Tensor:
 
-    def get_subgraph_from_edges_removed(self, edges_removed: list[int]) -> list[int]:
+        return self.predict_discrete_probs(dim, indices)
+
+    def get_subgraph_from_edges_removed(self, edges_removed: List[int]) -> List[int]:
         edges = list(range(len(self.sampler_properties.edges)))
         result = []
 
@@ -306,8 +341,8 @@ class MomtropIntegrand:
 
         return result
 
-    def momtrop_parameterize_batch(self, xs: list[list[float]], force_sector: list[list[int]] | None = None
-                                   ) -> tuple[np.ndarray, np.ndarray]:
+    def momtrop_parameterize_batch(self, xs: List[List[float]], force_sector: List[List[int]] | None = None
+                                   ) -> Tuple[np.ndarray, np.ndarray]:
         samples = self.sampler.sample_batch(
             xs, self.edge_data, self.settings, force_sector)
 
@@ -316,18 +351,150 @@ class MomtropIntegrand:
 
         return loop_momenta, jacobians
 
-    def integrate_batch(self, xs: list[list[float]], indices: list[list[int]] | None = None
-                        ) -> np.ndarray:
+    def integrate_batch(self, xs: torch.Tensor, indices: torch.Tensor | None = None
+                        ) -> torch.Tensor:
+        xs, indices = xs.tolist(), indices.tolist()
         force_sector = [
             ind + self.get_subgraph_from_edges_removed(ind) for ind in indices]
         loop_momenta, jacs = self.momtrop_parameterize_batch(xs, force_sector)
+        
+        return torch.tensor(self.integrand(loop_momenta)*jacs)
 
-        return self.integrand(loop_momenta)*jacs
+    def eval_integrand(self, x_all: torch.Tensor) -> torch.Tensor:
+        x = x_all[:, -self.continuous_dim:]
+        indices = x_all[:, :-self.continuous_dim].long()
+
+        return self.__call__(indices, x)
+        
+
+    def madnis_integrand(self) -> MadnisIntegrand:
+        return MadnisIntegrand(
+            function=self.eval_integrand,
+            input_dim=self.continuous_dim + len(self.discrete_dims),
+            discrete_dims=self.discrete_dims,
+            discrete_prior_prob_function=self.madnis_predict_discrete_probs,
+        )
 
     def __call__(self, indices: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        result = self.integrate_batch(x.tolist(), indices.tolist())
+        assert (ln:=len(indices)) == len(x), "indices and x must be of same length"
 
-        return torch.tensor(result)
+        if self.n_cores == 1:
+            return self.integrate_batch(x, indices)
+
+        n_cores = min(ln, self.n_cores) 
+        # cloning data in case I don't understand how racing conditions work with sequences
+        """
+        x_chunks = [ xc.detach().clone() for xc in chunks(x, n_cores) ]
+        indices_chunks = [ ic.detach().clone() for ic in chunks(indices, n_cores) ]
+        args_chunked = zip(x_chunks, indices_chunks) """
+        # pass only slices of the data
+        # args_chunked = zip(chunks(x, n_cores), chunks(indices, n_cores))
+
+        # Not working chunked Process/Queue approach
+        """ result_queue = Queue()
+
+        def worker(args_chunk, chunk_index):
+            result_queue.put( (chunk_index, self.integrate_batch(*args_chunk)) )
+
+        processes: List(Process) = []
+        
+        for chunk_index, args_chunk in enumerate(args_chunks):
+            process = Process(target=worker, args=(args_chunk, chunk_index))
+            processes.append(process)
+            process.start()
+        
+        result = [result_queue.get() for p in processes]
+        result_sorted = [None] * n_cores
+
+        for index, res in result:
+            result_sorted[index] = res
+
+        for p in processes:
+            p.join()
+        
+        return torch.hstack(result_sorted) """
+
+        # (Sometimes) working manager approach
+        """
+        with Manager() as manager:
+            result_sorted = manager.list([None]*n_cores)
+
+            def worker(args_chunk, chunk_id):
+                result_sorted[chunk_id] = self.integrate_batch(*args_chunk)
+                print(f"Worker {chunk_id} has finished.")
+        
+            processes: List(Process) = []
+
+            for chunk_id, args_chunk in enumerate(args_chunked):
+                process = Process(target=worker, args=(args_chunk, chunk_id))
+                processes.append(process)
+                process.start()
+            
+            for process in processes: List(Process):
+                process.join()
+
+            return torch.hstack(list(result_sorted))
+        """
+        
+        # Symbolica worker approach
+        MAX_CHUNK_SIZE = 1024
+        chunks_per_worker = int(ln / n_cores / MAX_CHUNK_SIZE) + 1
+        n_chunks = n_cores * chunks_per_worker
+
+        # args_chunked = zip(chunks(x, n_chunks), chunks(indices, n_chunks))
+        x_chunks = [ xc for xc in chunks(x, n_chunks) ]
+        indices_chunks = [ ic for ic in chunks(indices, n_chunks) ]
+        args_chunked = zip(x_chunks, indices_chunks)
+
+        def worker(q_in: Queue, q_out: Queue, worker_id) -> None:
+            while True:
+                data = q_in.get()
+                if data is None:
+                    break
+                args_chunk, chunk_id = data
+                xs, indices = args_chunk
+                q_out.put((self.integrate_batch(xs, indices), chunk_id))
+        
+        workers = []
+        for worker_id in range(n_cores):
+            q_in, q_out = Queue(), Queue()
+            Process(target=worker, args=(q_in, q_out, worker_id)).start()
+            workers.append((q_in, q_out))
+        
+        curr_chunk_id = 0
+        for q_in, _ in workers:
+            for _ in range(chunks_per_worker):
+                q_in.put((next(args_chunked), curr_chunk_id))
+                curr_chunk_id += 1
+
+        result_sorted = [None]*n_chunks
+        for _, q_out in workers:
+            for _ in range(chunks_per_worker):
+                res, chunk_id = q_out.get()
+                result_sorted[chunk_id] = res
+
+        for q_in, _ in workers:
+            q_in.put(None)
+
+        return torch.hstack(result_sorted)
+
+        
+        """
+        for n_iter in range(10):
+            g = grid.export_grid()
+            for q_in, _ in workers:
+                q_in.put((g, 1000000 // n_workers))
+
+            for _, q_out in workers:
+                filled_grid_b = q_out.get()
+                grid.merge(NumericalIntegrator.import_grid(filled_grid_b))
+
+            (avg, err, chi) = grid.update(1.5)
+            print(avg, err, chi)
+
+        for q_in, _ in workers:
+            q_in.put(None)
+        """
 
 
 class TropicalIntegrator:
@@ -342,6 +509,7 @@ class TropicalIntegrator:
         )
         self.optimizer = torch.optim.Adam(self.flow.parameters(), lr)
         self.batch_size = batch_size
+        self.step = 0
 
     def sample(self, n: int):
         with torch.no_grad():
@@ -376,9 +544,11 @@ class TropicalIntegrator:
         for i in range(iterations):
             samples = self.sample(self.batch_size)
             loss += self.optimization_step(samples)
-            if (i + 1) % n_log == 0:
-                print(f"Batch {i+1}: loss={loss / n_log:.6f}")
+            self.step += 1
+            if (self.step) % n_log == 0:
+                print(f"Batch {self.step}: loss={loss / n_log:.6g}")
                 loss = 0.
+        
 
     def integrate(self, n: int) -> tuple[float, float]:
         samples = self.sample(n)
@@ -386,15 +556,3 @@ class TropicalIntegrator:
         integral = weights.mean().item()
         error = weights.std().item() / math.sqrt(n)
         return integral, error
-
-
-def integrate_flat(integrand, n):
-    indices = torch.stack(
-        [torch.randint(0, dim, (n, )) for dim in integrand.discrete_dims], dim=1
-    )
-    prob = 1 / torch.tensor(integrand.discrete_dims).prod()
-    x = torch.rand((n, integrand.continuous_dim))
-    weights = integrand(indices, x) / prob
-    integral = weights.mean().item()
-    error = weights.std().item() / math.sqrt(n)
-    return integral, error
