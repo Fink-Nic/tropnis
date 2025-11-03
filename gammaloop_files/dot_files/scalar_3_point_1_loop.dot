@@ -1,0 +1,12 @@
+digraph massless_triangle_0 {
+num=1;
+overall_factor=1;
+multiplicity_factor=1;
+ext    [style=invis]
+ext -> v4:1 [pdg=1000, id=0];
+v5:2 -> ext [pdg=1000, id=1];
+v6:0 -> ext [pdg=1000, id=2];
+v4 -> v5 [pdg=1000, id=3];
+v5 -> v6 [pdg=1000, id=4, lmb_id=0];
+v6 -> v4 [pdg=1000, id=5];
+}

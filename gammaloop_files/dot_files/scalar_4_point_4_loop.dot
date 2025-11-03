@@ -1,0 +1,22 @@
+digraph fishnet_2x2_0 {
+num=1;
+overall_factor=1;
+multiplicity_factor=1;
+ext    [style=invis]
+ext -> v5:1 [pdg=1000, id=0];
+ext -> v11:2 [pdg=1000, id=1];
+v7:3 -> ext [pdg=1000, id=2];
+v13:0 -> ext [pdg=1000, id=3];
+v5 -> v6 [pdg=1000, id=4];
+v6 -> v7 [pdg=1000, id=5];
+v8 -> v9 [pdg=1000, id=6, lmb_id=0];
+v9 -> v10 [pdg=1000, id=7, lmb_id=1];
+v11 -> v12 [pdg=1000, id=8];
+v12 -> v13 [pdg=1000, id=9];
+v5 -> v8 [pdg=1000, id=10];
+v6 -> v9 [pdg=1000, id=11];
+v7 -> v10 [pdg=1000, id=12];
+v8 -> v11 [pdg=1000, id=13];
+v9 -> v12 [pdg=1000, id=14, lmb_id=2];
+v10 -> v13 [pdg=1000, id=15, lmb_id=3];
+}

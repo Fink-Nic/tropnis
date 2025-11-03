@@ -1,0 +1,20 @@
+[gammaloop_state]
+state_name = "threshold_1L_6photons_output"
+integration_state_name = "integration_threshold_1L_6photons"
+process_name = "physical_1L_6photons"
+
+[tropnis]
+batch_size = 65536
+evaluate_real_part = true
+n_cores = 32
+discrete_model = "transformer"
+
+[momtrop]
+edge_weight = 0.555555555555
+
+[transformer]
+embedding_dim = 128
+feedforward_dim = 256
+heads = 8
+mlp_units = 128
+transformer_layers = 2

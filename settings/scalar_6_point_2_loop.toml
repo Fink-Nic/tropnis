@@ -1,0 +1,20 @@
+[gammaloop_state]
+state_name = "scalar_6_point_2_loop_output"
+integration_state_name = "integration_scalar_6_point_2_loop"
+process_name = "scalar_6_point_2_loop"
+
+[tropnis]
+batch_size = 2048
+evaluate_real_part = true
+n_cores = 32
+discrete_model = "transformer"
+
+[momtrop]
+edge_weight = 0.55555555555
+
+[transformer]
+embedding_dim = 128
+feedforward_dim = 256
+heads = 8
+mlp_units = 128
+transformer_layers = 2

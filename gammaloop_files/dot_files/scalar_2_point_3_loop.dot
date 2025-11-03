@@ -1,0 +1,15 @@
+digraph ltd_topology_f_0 {
+num=1;
+overall_factor=1;
+multiplicity_factor=1;
+ext    [style=invis]
+ext -> v3:1 [pdg=1000, id=0];
+v4:0 -> ext [pdg=1000, id=1];
+v3 -> v5 [pdg=1000, id=2];
+v5 -> v4 [pdg=1000, id=3];
+v4 -> v6 [pdg=1000, id=4, lmb_id=0];
+v6 -> v3 [pdg=1000, id=5];
+v5 -> v7 [pdg=1000, id=6];
+v4 -> v7 [pdg=1000, id=7, lmb_id=1];
+v6 -> v7 [pdg=1000, id=8, lmb_id=2];
+}

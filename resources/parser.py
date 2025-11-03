@@ -1,75 +1,60 @@
 # type: ignore
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Dict, Tuple, List
 import momtrop
 import pydot
 import json
 import toml
 import os
-import gammaloop
 import numpy as np
-from symbolica import E, S, Expression
+from gammaloop import GammaLoopAPI
+from resources.helpers import PATHS, deep_update
 
 
 @dataclass
 class MomtropSamplerProperties:
     edge_weights: list[int]
     edge_masses: list[int]
-    edges: list[momtrop.Edge]
-    external_vertices: list[int]
-    signature: list[list[int]]
-    momentum_shifts: list[momtrop.Vector]
+    edge_ismassive: list[bool]
+    edge_src_dst: list[(int, int)]
+    graph_externals: list[int]
+    graph_signature: list[list[int]]
+    momentum_shifts: list[list[float]]
 
 
-class RunCardParser:
-    def __init__(self, runcard_path: str, verbose: bool = False):
-        self.runcard_path = runcard_path
-        with open(self.runcard_path, 'r') as f:
-            self.runcard = toml.load(f)
-            self.verbose = verbose
-            self.settings = self.runcard['tropnis_settings']
-            self.kinematics = self.runcard['kinematics']
-            self.gl_files = self.runcard['gammaloop_files']
-            self.gl_state = self.runcard['gammaloop_state']
-        self.dot_graph = pydot.graph_from_dot_file(self.gl_files['processed_dot_file'])[0]
-        with open(self.gl_files['model_json_file'], 'r') as f:
+class ModelParser:
+    def __init__(self, model_path: str):
+        self.model_path = model_path
+        with open(self.model_path, 'r') as f:
             self.model = json.load(f)
 
-    def get_gl_integrand(self) -> Callable[[np.ndarray], np.ndarray]:
-        def gammaloop_integrand(loop_momenta: np.ndarray) -> np.ndarray:
-            discrete_dims = np.array(
-                loop_momenta.shape[0]*[[0]], dtype=np.uint64)
-            loop_momenta = loop_momenta.reshape(-1, 3)
-            state = gammaloop.GammaLoopState(self.gl_state['state_path'])
-            res, jac = state.batched_inspect(
-                points=loop_momenta, momentum_space=True,
-                process_id=self.gl_state['process_id'],
-                integrand_name=self.gl_state['integrand_name'],
-                use_f128=False,  discrete_dims=discrete_dims
-            )
-            if self.settings['evaluate_real_part']:
-                return res.real
-            return res.imag
-        return gammaloop_integrand
-
-    def get_particle_parameter(self, particle_name: str, parameter_name: str):
+    def get_particle_from_identifier(self, identifier_name: str, value) -> Dict:
         particle_match = None
         for particle in self.model['particles']:
             try:
-                if particle['name'] == particle_name:
+                if particle[identifier_name] == value:
                     particle_match = particle
             except:
                 pass
 
         if particle_match is None:
             raise KeyError(
-                f"Particle '{particle_name}' does not exist in model '{self.gl_files['model_json_file']}'.")
+                f"Particle with {identifier_name}='{value}' does not exist in model '{self.model_path}'.")
 
+        return particle_match
+
+    def get_particle_parameter_from_identifier(self,
+                                               identifier_name: str,
+                                               identifier_value,
+                                               parameter_name: str):
+        particle_match = self.get_particle_from_identifier(
+            identifier_name, identifier_value)
         try:
             model_parameter_name = particle_match[parameter_name]
         except KeyError:
             raise KeyError(
-                f"Particle '{particle_name}' does not have parameter '{parameter_name}'.")
+                f"Particle with '{identifier_name}' = '{identifier_value}' "
+                + f"does not have parameter '{parameter_name}'.")
 
         if model_parameter_name == 'ZERO':
             return [0., 0.]
@@ -83,19 +68,136 @@ class RunCardParser:
                 pass
 
         if parameter_match is None:
-            raise KeyError(f"The model '{self.gl_files['model_json_file']}' does not specify a value for the \
-                           parameter '{model_parameter_name}'. This should not happen!!!")
+            raise KeyError(f"The model '{self.model_path}' does not specify a value for "
+                           + f"the parameter '{model_parameter_name}'.")
 
         return parameter_match
 
-    def generate_momtrop_sampler_from_dot_file(self) -> tuple[momtrop.Sampler, MomtropSamplerProperties]:
-        # External momenta
-        ext_momenta = self.kinematics['momenta']
-        n_ext_mom = len(ext_momenta) + 1
-        external_sigs = n_ext_mom*[0.]
+    def get_particle_parameter_from_name(self, particle_name: str, parameter_name: str):
+        return self.get_particle_parameter_from_identifier('name', particle_name, parameter_name)
 
-        # Import the dot graph
-        graph = self.dot_graph
+    def get_particle_mass_from_name(self, particle_name: str):
+        return self.get_particle_parameter_from_identifier('name', particle_name, 'mass')
+
+
+class SettingsParser:
+    def __init__(self, settings_path: str, 
+                 verbose: bool = False,
+                 default_path: str = PATHS['default_settings'],):
+        if not os.path.isabs(settings_path):
+            settings_path = os.path.join(PATHS['tropnis'], settings_path)
+        self.settings_path = settings_path
+        self.verbose = verbose
+        self.default_path = default_path
+        with open(self.settings_path, 'r') as f:
+            settings = toml.load(f)
+            if settings is None:
+                raise FileExistsError("The path to the settings file must be specified either relative " 
+                                      +"to the tropnis folder or be given as an absolute path.")
+        with open(self.default_path, 'r') as f:
+            default_settings = toml.load(f)
+        self.settings = deep_update(default_settings, settings)
+        self.gammaloop_state_path = os.path.join(PATHS['gammaloop_states'], 
+                                                 self.settings['gammaloop_state']['state_name'])
+        self.gammaloop_runcard_path = os.path.join(self.gammaloop_state_path, 
+                                                   self.settings['gammaloop_state']['runcard_name'])
+        self.dot_path = os.path.join(self.gammaloop_state_path,
+                                PATHS['state_to_dot'], 
+                                self.settings['gammaloop_state']['process_name'],
+                                self.settings['gammaloop_state']['integrand_name']+".dot")
+        self.model_path = os.path.join(self.gammaloop_state_path,
+                                       self.settings['gammaloop_state']['model_name'])
+    
+    def get_gammaloop_integration_result(self):
+        result_path = os.path.join(PATHS['gammaloop_states'],
+                                   self.settings['gammaloop_state']['integration_state_name'], 
+                                   self.settings['gammaloop_state']['integration_result_file'])
+        with open(result_path, 'r') as f:
+            gammaloop_result = json.load(f)
+        
+        return gammaloop_result
+
+    def get_dot_graph(self):
+        return pydot.graph_from_dot_file(self.dot_path)[self.settings['gammaloop_state']['process_id']]
+    
+    def get_model(self):
+        return ModelParser(self.model_path)
+
+    def get_gl_state(self) -> GammaLoopAPI:
+        return GammaLoopAPI(self.gammaloop_state_path)
+
+    def get_gl_integrand(self) -> Callable[[np.ndarray], np.ndarray]:
+        def gammaloop_integrand(loop_momenta: np.ndarray,
+                                state: GammaLoopAPI | None = None) -> np.ndarray:
+            if state is None:
+                state = self.get_gl_state()
+            discrete_dims = np.zeros(
+                (loop_momenta.shape[0], 1), dtype=np.uint64)
+            res, jac = state.batched_inspect(
+                points=loop_momenta, momentum_space=True,
+                process_id=self.settings['gammaloop_state']['process_id'],
+                integrand_name=self.settings['gammaloop_state']['integrand_name'],
+                use_f128=False,  discrete_dims=discrete_dims
+            )
+            return res.real if self.settings['tropnis']['evaluate_real_part'] else res.imag
+
+        return gammaloop_integrand
+    
+    def get_ext_momenta(self) -> Tuple[List[List[float]], int]:
+        with open(self.gammaloop_runcard_path, 'r') as f:
+            momenta_raw = f.read().split("momenta")[1].split("helicities")[0]
+        before, after = momenta_raw.split("\"dependent\",")
+        before = "list" + before + "]"
+        after = "list = [" + after
+        before, after = toml.loads(before)['list'], toml.loads(after)['list']
+        dependent_momentum_index = len(before)
+        momenta = before + after
+
+        return momenta, dependent_momentum_index
+    
+    def infer_dependent_momentum(self, 
+                                 ext_momenta: list[list[float]], 
+                                 ext_sigs: list[int],
+                                 dependent_momentum_index: int) -> list[float]:
+        # Infering the dependent momentum from momentum conservation
+        dmi = dependent_momentum_index
+        dm_sig = ext_sigs[dmi]
+        dependent_momentum = 4*[0.]
+        exclusive_external_sigs = ext_sigs[:dmi] + ext_sigs[dmi+1:]
+        for momentum, sig in zip(ext_momenta, exclusive_external_sigs):
+            dependent_momentum[0] -= dm_sig*sig*momentum[0]
+            dependent_momentum[1] -= dm_sig*sig*momentum[1]
+            dependent_momentum[2] -= dm_sig*sig*momentum[2]
+            dependent_momentum[3] -= dm_sig*sig*momentum[3]
+        ext_momenta = ext_momenta[:dmi] + \
+            [dependent_momentum] + ext_momenta[dmi:]
+
+        if self.verbose:
+            test_mom_cons = 4*[0.]
+            for momentum, sig in zip(ext_momenta, ext_sigs):
+                test_mom_cons[0] += sig*momentum[0]
+                test_mom_cons[1] += sig*momentum[1]
+                test_mom_cons[2] += sig*momentum[2]
+                test_mom_cons[3] += sig*momentum[3]
+
+            print("------------ INFERED EXTERNAL MOMENTUM --------------")
+            print(f"{dependent_momentum=}")
+            print(f"{test_mom_cons=} SHOULD BE ZERO")
+        
+        return ext_momenta
+
+    def generate_momtrop_sampler_from_dot_file(self) -> Tuple[momtrop.Sampler, MomtropSamplerProperties]:
+        from symbolica import E, S, Expression
+
+        model = self.get_model()
+
+        # External momenta
+        ext_momenta, dependent_momentum_index = self.get_ext_momenta()
+        n_ext_mom = len(ext_momenta) + 1
+        ext_sigs = n_ext_mom*[0.]
+
+        # Dot graph
+        graph = self.get_dot_graph()
         edges = graph.get_edges()
         vertices = graph.get_nodes()
 
@@ -126,42 +228,24 @@ class RunCardParser:
             if edge.get('source') is None:
                 # Incoming external momentum
                 EXT_VERTICES.append(graph.get_node(edge.get("dst"))[0])
-                external_sigs[int(dst_split[1])] = 1
+                ext_sigs[int(dst_split[1])] = 1
 
             elif edge.get('sink') is None:
                 # Outgoing external momentum
                 EXT_VERTICES.append(graph.get_node(edge.get("src"))[0])
-                external_sigs[int(src_split[1])] = -1
+                ext_sigs[int(src_split[1])] = -1
             else:
                 INT_EDGES.append(edge)
-                particle = edge.get('particle')[1:-1]
-                edge.set('mass', self.get_particle_parameter(
-                    particle, 'mass')[0])
+                particle_name = edge.get('particle')[1:-1]
+                edge.set('mass', model.get_particle_mass_from_name(particle_name)[0])
                 src_vert = graph.get_node(edge.get('src'))[0]
                 dst_vert = graph.get_node(edge.get('dst'))[0]
                 edge.set('src_id', src_vert.get('v_id'))
                 edge.set('dst_id', dst_vert.get('v_id'))
+        
+        # Infer the missing external momentum
+        ext_momenta = self.infer_dependent_momentum(ext_momenta, ext_sigs, dependent_momentum_index)
 
-        # Infering the dependent momentum from momentum conservation
-        dmi = self.kinematics['dependent_momentum_index'] % n_ext_mom
-        dm_sig = external_sigs[dmi]
-        dependent_momentum = 4*[0.]
-        exclusive_external_sigs = external_sigs[:dmi] + external_sigs[dmi+1:]
-        for momentum, sig in zip(ext_momenta, exclusive_external_sigs):
-            dependent_momentum[0] -= dm_sig*sig*momentum[0]
-            dependent_momentum[1] -= dm_sig*sig*momentum[1]
-            dependent_momentum[2] -= dm_sig*sig*momentum[2]
-            dependent_momentum[3] -= dm_sig*sig*momentum[3]
-        ext_momenta = ext_momenta[:dmi] + \
-            [dependent_momentum] + ext_momenta[dmi:]
-
-        test_mom_cons = 4*[0.]
-        for momentum, sig in zip(ext_momenta, external_sigs):
-            test_mom_cons[0] += sig*momentum[0]
-            test_mom_cons[1] += sig*momentum[1]
-            test_mom_cons[2] += sig*momentum[2]
-            test_mom_cons[3] += sig*momentum[3]
-        print(f"{test_mom_cons=} SHOULD BE ZERO!")
         # Symbolica setup for LMB representation parsing
         # P: External momenta
         # K: Internal momenta
@@ -173,23 +257,44 @@ class RunCardParser:
         TOLERANCE = 1E-10
         n_loops = len(LMB_EDGES)
         n_int_edges = len(INT_EDGES)
-        mt_weight = (3*n_loops + 3/2)/n_int_edges/2
+        edge_weights = self.settings['momtrop']['edge_weight']
+        match edge_weights:
+            case int() | float():
+                edge_weights = n_int_edges*[float(edge_weights)]
+            case [_, *_]:
+                if not len(edge_weight) == n_int_edges:
+                    raise ValueError("If provided as a sequence, the number of momtrop "
+                                     + "edgeweights must match the number of propagators.")
+                edge_weights = edge_weights
+            case "default":
+                default_weight = (3*n_loops + 3/2)/n_int_edges/2
+                edge_weights = n_int_edges*[default_weight]
+                if self.verbose:
+                    print(f"Setting momtrop edge weights to default: {default_weight:.5f}")
+            case _:
+                raise ValueError("Momtrop edge weights must be one of: \n"
+                                 +"Number, Sequence of Numbers or \"default\".")
 
+        
+        graph_externals = sorted([v.get("v_id") for v in EXT_VERTICES])
+        graph_signature = []
+        edge_offsets = []
+        edge_src_dst = []
+        edge_masses = []
+        edge_ismassive = []
         mt_edges = []
-        mt_masses = []
-        mt_signature = []
-        mt_offsets = []
-        mt_externals = sorted([v.get("v_id") for v in EXT_VERTICES])
 
-        for edge in INT_EDGES:
+        for edge, edge_weight in zip(INT_EDGES, edge_weights):
             # Generate the momtrop edge
             src_id = edge.get('src_id')
             dst_id = edge.get('dst_id')
             mass = edge.get('mass')
+            edge_src_dst.append((src_id, dst_id))
+            edge_masses.append(mass)
+            edge_ismassive.append(mass > TOLERANCE)
             mt_edges.append(
-                momtrop.Edge((src_id, dst_id), mass > TOLERANCE, mt_weight)
+                momtrop.Edge((src_id, dst_id), mass > TOLERANCE, edge_weight)
             )
-            mt_masses.append(mass)
 
             # LMB representation parsing
             e: Expression = E(edge.get('lmb_rep')[1:-1])
@@ -197,35 +302,32 @@ class RunCardParser:
             e = e.replace(K(x_, a_), K(x_))
             lmb_sig = [int(e.coefficient(K(lmb_id)).to_sympy())
                        for lmb_id in range(n_loops)]
-            mt_signature.append(lmb_sig)
+            graph_signature.append(lmb_sig)
 
             offset_sig = [float(e.coefficient(P(ext_id)).to_sympy())
                           for ext_id in range(n_ext_mom)]
-            if self.verbose:
-                print(f"{offset_sig=}")
             offset = [0. for _ in range(3)]
             for coeff, ext_mom in zip(offset_sig, ext_momenta):
                 for i in range(3):
                     offset[i] += coeff*ext_mom[i+1]
 
             if self.verbose:
+                print(f"{offset_sig=}")
                 print(f"{offset=}")
 
-            mt_offsets.append(momtrop.Vector(*offset))
-
-        assym_graph = momtrop.Graph(mt_edges, mt_externals)
-        sampler = momtrop.Sampler(assym_graph, mt_signature)
+            edge_offsets.append(offset)
+        
+        assym_graph = momtrop.Graph(mt_edges, graph_externals)
+        sampler = momtrop.Sampler(assym_graph, graph_signature)
 
         if self.verbose:
             print("-------------- PARSED MOMTROP SAMPLER ---------------")
-            print(f"{dependent_momentum=}")
-            print(f"{test_mom_cons=} SHOULD BE ZERO")
             print(f"{ext_momenta=}")
-            print(f"{mt_masses=}")
-            print(f"{mt_signature=}")
-            print(f"{mt_externals=}")
+            print(f"{edge_masses=}")
+            print(f"{graph_signature=}")
+            print(f"{graph_externals=}")
             print(f"{offset_sig=}")
-            print(f"{mt_offsets=}")
+            print(f"{edge_offsets=}")
             print(f"------------------ INTERNAL EDGES ------------------")
             for edge in INT_EDGES:
                 print(edge.to_string())
@@ -237,12 +339,12 @@ class RunCardParser:
                 print(vert.to_string())
 
         sampler_properties = MomtropSamplerProperties(
-            edge_weights=mt_weight,
-            edge_masses=mt_masses,
-            edges=mt_edges,
-            external_vertices=mt_externals,
-            signature=mt_signature,
-            momentum_shifts=mt_offsets,
+            edge_weights=edge_weights,
+            edge_masses=edge_masses,
+            edge_ismassive=edge_ismassive,
+            edge_src_dst=edge_src_dst,
+            graph_externals=graph_externals,
+            graph_signature=graph_signature,
+            momentum_shifts=edge_offsets,
         )
-
         return sampler, sampler_properties
