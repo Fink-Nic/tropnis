@@ -78,4 +78,4 @@ def error_fmter(value, error, prec: int | None = None):
     value_str = f'{value:.{prec}e}'
     error_str = f'{error:.{error_prec}e}'
 
-    return f'{value_str[:prec+2]}({error_str[0]}{error_str[2:error_prec+2]}){value_str[prec+3:]}'
+    return f'{value_str[:prec+2]}({error_str[0]}{error_str[2:error_prec+2]}){value_str[prec+2:]}'
