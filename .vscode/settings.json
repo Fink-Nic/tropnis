@@ -1,6 +1,0 @@
-{
-    "python.analysis.extraPaths": [
-        "/home/shared_vhirshi/nic/madnis_dev"
-    ],
-    "python.analysis.typeCheckingMode": "standard"
-}
