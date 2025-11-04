@@ -7,6 +7,7 @@ from typing import List, Sequence, Dict
 from collections.abc import Mapping
 
 
+# Load the file system structure specified in PATHS.json
 with open(os.path.join(os.path.dirname(__file__), "PATHS.json")) as f:
     PATHS = json.load(f)
 
@@ -16,6 +17,9 @@ def test_integrand(loop_momenta: np.ndarray) -> np.ndarray:
 
 
 def chunks(ary: Sequence, n_chunks: int) -> List[Sequence]:
+    """
+    Like numpy.array_split, but works for all sequences
+    """
     l = len(ary)
     if n_chunks > l or n_chunks < 1:
         raise ValueError(
@@ -34,9 +38,12 @@ def chunks(ary: Sequence, n_chunks: int) -> List[Sequence]:
 
 
 def deep_update(orig_dict: Dict, new_dict: Dict):
+    """
+    Used to Overwrite the default settings with the specified settings file
+    """
     for key, val in new_dict.items():
         if isinstance(val, Mapping):
-            tmp = deep_update(orig_dict.get(key, { }), val)
+            tmp = deep_update(orig_dict.get(key, {}), val)
             orig_dict[key] = tmp
         elif isinstance(val, list):
             orig_dict[key] = (orig_dict.get(key, []) + val)
@@ -45,37 +52,49 @@ def deep_update(orig_dict: Dict, new_dict: Dict):
     return orig_dict
 
 
-def error_fmter(value, error, prec: int | None = None):
-    log10v, log10e = math.log10(abs(value)), math.log10(error)
+def error_fmter(value: float, error: float, prec_error: int = 2) -> str:
+    """
+    Format a value and its error in scientific notation with a given number of significant digits for the error.
 
-    if prec is None:
-        error_prec = 2
-        prec = error_prec + math.floor(log10v) - math.floor(log10e)
+    Examples:
+        value = 1234.5678, error = 111.11, prec_error = 2 -> "1.23(11)e+04"
+        value = 12.345, error = 111.111, prec_error = 1 -> "1.2(11.1)e+01"
+        value = 0.0123, error = 0.001234, prec_error = 3 -> "1.230(123)e-02"
+    """
+    if error <= 0:
+        raise ValueError("Error must be positive.")
+    if prec_error < 1:
+        raise ValueError(
+            "Number of significant digits should be at least 1, or there is no reason to use this function.")
+
+    if value == 0:
+        log10val = 0
     else:
-        error_prec = prec - math.floor(log10v) + math.floor(log10e)
+        log10val = math.floor(math.log10(abs(value)))
+    exp10val = 10**log10val
 
-    # Case of small error, user should increase precision or use default
-    if error_prec <= 0:
-        print(
-            f'Automatically adjusted precision for the error formatter to {prec - error_prec + 1}.')
-        prec = prec - error_prec + 1
-        error_prec = 1
+    # Normalize both value and error to the same order of magnitude
+    val_norm = value / exp10val
+    err_norm = error / exp10val
 
-    # General string formatter returns non-scientific representation for -4<log10(value)<5
-    # 'Hashtag' option for g formatter forces trailing zeros
-    if log10v < prec-1 and log10v >= -2:
-        value_str = f'{value:#.{prec}g}'
-        if log10e >= 0:
-            error_str = f'{error:#.{error_prec}g}'
-            return f'{value_str}({error_str})'
-        else:
-            error_str = f'{error:.{error_prec}e}'
-            return f'{value_str}({error_str[0]}{error_str[2:error_prec+1]})'
+    # Set prec: the significant number of digits such that prec_error number
+    # of significant digits are shown for the error
+    log10err_norm = math.floor(math.log10(err_norm))
 
-    # In case of scientific representation, reduce prec by one to match actual shown digits with prec
-    prec -= 1
-    error_prec -= 1
-    value_str = f'{value:.{prec}e}'
-    error_str = f'{error:.{error_prec}e}'
+    if log10err_norm >= 0:
+        prec = prec_error
+    else:
+        prec = prec_error - log10err_norm
 
-    return f'{value_str[:prec+2]}({error_str[0]}{error_str[2:error_prec+2]}){value_str[prec+2:]}'
+    # Get digits without scientific notation
+    val_str = f"{val_norm:.{prec}f}"
+    if log10err_norm >= 0:
+        err_str = f"{err_norm:.{prec}f}"
+    else:
+        err_str = f"{err_norm:.{prec - 1}f}".replace(".", "")[-prec_error:]
+    # I don't think this can happen since error>0, but if the error is somehow rounded
+    # down to zero, err_str will be empty and we default to
+    if not err_str:
+        err_str = '0' * prec_error
+
+    return f"{val_str}({err_str})e{log10val:+03d}"

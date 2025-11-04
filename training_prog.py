@@ -28,7 +28,8 @@ def main() -> None:
 
         print(f"Working on runcard {settings_file}")
         if not args.no_output:
-            subfolder_path = os.path.join(PATHS['tropnis'], "outputs", "training_prog")
+            subfolder_path = os.path.join(
+                PATHS['tropnis'], "outputs", "training_prog")
             print(f"Output will be at {subfolder_path}")
 
         # Initialize the gammaloop integrand and madnis integrator
@@ -48,7 +49,7 @@ def main() -> None:
         )
         print(f"Initializing the Integrand and Integrator took {
             - time_last + (time_last := time()):.2f}s")
-        
+
         # Training parameters
         params = integrand.settings['plotting_params']['training_prog']
         n_training_steps = params['n_training_steps']
@@ -69,8 +70,8 @@ def main() -> None:
             if step % n_plot_rsd == 0:
                 metrics = integrator.integration_metrics(n_samples)
                 rsd = metrics.rel_stddev
-                print(f"Trained Result after {step} steps of {batch_size}:     {
-                    metrics.integral:.8g} +- {metrics.error:.8g}, RSD = {rsd:.2f}")
+                print(f"Trained Result after {step} steps of {batch_size}: {
+                    error_fmter(metrics.integral, metrics.error, 4)}, RSD = {rsd:.3f}")
                 rsds.append(rsd)
                 steps_rsds.append(step)
 
@@ -83,8 +84,8 @@ def main() -> None:
             gl_neval = gl_res['neval']
             gl_rsd = abs(gl_err / gl_int) * math.sqrt(gl_neval)
 
-            print(f"Gammaloop Result:    {
-                gl_int:.8g} +- {gl_err:.8g}, RSD = {gl_rsd:.2f}")
+            print(
+                f"Gammaloop Result: {error_fmter(gl_int, gl_res, 4)}, RSD = {gl_rsd:.3f}")
 
         time_last = time()
         metrics = integrator.integration_metrics(n_samples)
@@ -94,9 +95,10 @@ def main() -> None:
         momtrop_int = metrics.integral
         momtrop_err = metrics.error
         momtrop_rsd = metrics.rel_stddev
-        print(f"Momtrop Result (before training) using {n_samples} samples:     {
-            momtrop_int:.8g} +- {momtrop_err:.8g}, RSD = {momtrop_rsd:.2f}")
-        
+        print(
+            f"Momtrop Result (before training) using {n_samples} samples: {
+                error_fmter(momtrop_int, momtrop_err, 4)}, RSD = {momtrop_rsd:.3f}")
+
         # Plotting setup
         losses = []
         rsds = [metrics.rel_stddev]
@@ -106,16 +108,16 @@ def main() -> None:
         integrator.train(n_training_steps, callback)
 
         if gl_res is not None:
-            print(f"Gammaloop Result:    {
-                gl_int:.8g} +- {gl_err:.8g}, RSD = {gl_rsd:.2f}")
-        
+            print(
+                f"Gammaloop Result: {error_fmter(gl_int, gl_res, 4)}, RSD = {gl_rsd:.3f}")
+
         # Take the final snapshot
         metrics = integrator.integration_metrics(n_samples_after_training)
         trained_int = metrics.integral
         trained_err = metrics.error
         trained_rsd = metrics.rel_stddev
-        print(f"Trained Result after {integrator.step} steps of {batch_size}, using a sample size of {n_samples_after_training}:     {
-            trained_int:.8g} +- {trained_err:.8g}, RSD = {trained_rsd:.2f}")
+        print(f"Trained Result after {integrator.step} steps of {batch_size}, using a sample size of {n_samples_after_training}: {
+            error_fmter(trained_int, trained_err, 4)}, RSD = {trained_rsd:.3f}")
 
         # IMPORTANT: close the worker functions, or your script will hang
         integrand.end()
@@ -132,13 +134,12 @@ def main() -> None:
         axs[0].plot(steps_losses, losses)
         axs[0].set_ylabel("loss")
         axs[1].scatter(steps_rsds, rsds)
-        if gl_res is not None:
-            axs[1].hlines(gl_rsd, 0, n_training_steps, color="red", linestyle="--")
         axs[1].set_ylabel("RSD")
         axs[1].set_xlabel("Training steps")
         fig.suptitle(f"Training progression for {gammaloop_state}")
         filename = gammaloop_state+datetime.now().strftime('%Y_%m_%d-%H_%M_%S')
-        plt.savefig(os.path.join(subfolder_path, filename+".png"), dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(subfolder_path, filename+".png"),
+                    dpi=300, bbox_inches='tight')
 
         with open(os.path.join(subfolder_path, filename+".txt"), 'w') as f:
             sep = '-'
@@ -152,6 +153,7 @@ def main() -> None:
             f.write(f"{batch_size=}\n")
             f.write(f"{n_training_steps=}\n")
             f.write(f"{discrete_model=}\n")
+            f.write(f"Integrated phase: {RE_OR_IM}\n")
             try:
                 for key, value in discrete_model_params.items():
                     f.write(f"{key}={value}\n")
@@ -162,25 +164,26 @@ def main() -> None:
                 f.write(f"{' Gammaloop Results ':{'#'}^{width}}\n")
                 f.write(line)
                 f.write(f"Integral: {error_fmter(gl_int, gl_err)}\n")
-                f.write(f"RSD: {gl_rsd}\n")
+                f.write(f"RSD: {gl_rsd:.3f}\n")
                 f.write(f"Number of samples: {gl_neval}\n")
             f.write(f"\n{line}")
             f.write(f"{' Momtrop Results ':{'#'}^{width}}\n")
             f.write(line)
             f.write(f"Integral: {error_fmter(momtrop_int, momtrop_err)}\n")
-            f.write(f"RSD: {momtrop_rsd}\n")
+            f.write(f"RSD: {momtrop_rsd:.3f}\n")
             f.write(f"Number of samples: {n_samples}\n")
             f.write(f"\n{line}")
             f.write(f"{' Trained Results ':{'#'}^{width}}\n")
             f.write(line)
             f.write(f"Integral: {error_fmter(trained_int, trained_err)}\n")
-            f.write(f"RSD: {trained_rsd}\n")
+            f.write(f"RSD: {trained_rsd:.3f}\n")
             f.write(f"Number of samples: {n_samples_after_training}\n")
     except KeyboardInterrupt:
         print("\nCaught KeyboardInterrupt — stopping workers.")
         integrand.end()
     finally:
         integrand.end()
+
 
 if __name__ == "__main__":
     main()
