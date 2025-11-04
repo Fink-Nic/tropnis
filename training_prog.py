@@ -26,7 +26,7 @@ def main() -> None:
         args = parser.parse_args()
         settings_file = args.settings
 
-        print(f"Working on runcard {settings_file}")
+        print(f"Working on settings {settings_file}")
         if not args.no_output:
             subfolder_path = os.path.join(
                 PATHS['tropnis'], "outputs", "training_prog")
@@ -71,7 +71,7 @@ def main() -> None:
                 metrics = integrator.integration_metrics(n_samples)
                 rsd = metrics.rel_stddev
                 print(f"Trained Result after {step} steps of {batch_size}: {
-                    error_fmter(metrics.integral, metrics.error, 4)}, RSD = {rsd:.3f}")
+                    metrics.integral:.8g} +- {metrics.error:.8g}, RSD = {rsd:.3f}")
                 rsds.append(rsd)
                 steps_rsds.append(step)
 
