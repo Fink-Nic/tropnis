@@ -85,7 +85,7 @@ def main() -> None:
             gl_rsd = abs(gl_err / gl_int) * math.sqrt(gl_neval)
 
             print(
-                f"Gammaloop Result: {error_fmter(gl_int, gl_err, 4)}, RSD = {gl_rsd:.3f}")
+                f"Gammaloop Result: {gl_int:.8g} +- {gl_err:.8g}, RSD = {gl_rsd:.3f}")
 
         time_last = time()
         metrics = integrator.integration_metrics(n_samples)
@@ -97,7 +97,7 @@ def main() -> None:
         momtrop_rsd = metrics.rel_stddev
         print(
             f"Momtrop Result (before training) using {n_samples} samples: {
-                error_fmter(momtrop_int, momtrop_err, 4)}, RSD = {momtrop_rsd:.3f}")
+                momtrop_int:.8g} +- {momtrop_err:.8g}, RSD = {momtrop_rsd:.3f}")
 
         # Plotting setup
         losses = []
@@ -109,7 +109,7 @@ def main() -> None:
 
         if gl_res is not None:
             print(
-                f"Gammaloop Result: {error_fmter(gl_int, gl_err, 4)}, RSD = {gl_rsd:.3f}")
+                f"Gammaloop Result: {gl_int:.8g} +- {gl_err:.8g}, RSD = {gl_rsd:.3f}")
 
         # Take the final snapshot
         metrics = integrator.integration_metrics(n_samples_after_training)
@@ -117,7 +117,7 @@ def main() -> None:
         trained_err = metrics.error
         trained_rsd = metrics.rel_stddev
         print(f"Trained Result after {integrator.step} steps of {batch_size}, using a sample size of {n_samples_after_training}: {
-            error_fmter(trained_int, trained_err, 4)}, RSD = {trained_rsd:.3f}")
+            trained_int:.8g} +- {trained_err:.8g}, RSD = {trained_rsd:.3f}")
 
         # IMPORTANT: close the worker functions, or your script will hang
         integrand.end()
