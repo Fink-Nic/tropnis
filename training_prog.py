@@ -85,7 +85,7 @@ def main() -> None:
             gl_rsd = abs(gl_err / gl_int) * math.sqrt(gl_neval)
 
             print(
-                f"Gammaloop Result: {error_fmter(gl_int, gl_res, 4)}, RSD = {gl_rsd:.3f}")
+                f"Gammaloop Result: {error_fmter(gl_int, gl_err, 4)}, RSD = {gl_rsd:.3f}")
 
         time_last = time()
         metrics = integrator.integration_metrics(n_samples)
@@ -109,7 +109,7 @@ def main() -> None:
 
         if gl_res is not None:
             print(
-                f"Gammaloop Result: {error_fmter(gl_int, gl_res, 4)}, RSD = {gl_rsd:.3f}")
+                f"Gammaloop Result: {error_fmter(gl_int, gl_err, 4)}, RSD = {gl_rsd:.3f}")
 
         # Take the final snapshot
         metrics = integrator.integration_metrics(n_samples_after_training)
