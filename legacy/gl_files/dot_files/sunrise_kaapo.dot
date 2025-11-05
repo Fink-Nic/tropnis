@@ -1,0 +1,16 @@
+digraph sunrise_kaapo{
+    num = "1";
+    overall_factor = "1";
+    projector = "1";
+    
+    A [num=0];
+    B [num=0];
+    C [num=0];
+    D [num=0];
+    A:0 -> C:1 [source=0, sink=1, id=0, particle="scalar_0", lmb_id=0, lmb_rep="K(0,a___)"];
+    B:2 -> D:3 [source=0, sink=1, id=1, particle="scalar_0", lmb_id=1, lmb_rep="K(1,a___)"];
+    B:4 -> A:5 [source=0, sink=1, id=2, particle="scalar_0", lmb_rep="K(0,a___)-K(1,a___)"];
+    C:6 -> B:7 [source=0, sink=1, id=3, particle="scalar_1", lmb_rep="K(0,a___)"];
+    D:8 -> A:9 [source=0, sink=1, id=4, particle="scalar_1", lmb_rep="K(1,a___)"];
+
+}

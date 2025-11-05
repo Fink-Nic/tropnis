@@ -1,0 +1,23 @@
+[gammaloop_state]
+state_name = "vacuum_sunrise_kaapo"
+integration_state_name = "integration_vacuum_sunrise_kaapo"
+process_name = "vacuum_sunrise_kaapo"
+process_id = 0
+integrand_name = "default"
+
+[tropnis]
+evaluate_real_part = true
+n_cores = 32
+discrete_model = "transformer"
+
+[momtrop]
+edge_weight = 0.9
+
+[transformer]
+embedding_dim = 128
+feedforward_dim = 256
+heads = 8
+mlp_units = 128
+transformer_layers = 2
+
+[made]

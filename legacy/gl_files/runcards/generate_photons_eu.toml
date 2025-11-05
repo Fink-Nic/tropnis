@@ -1,0 +1,47 @@
+[kinematics]
+momenta = [
+    [
+    50.0,
+    0.0,
+    -30.0,
+    40.0,
+],
+    [
+    50.0,
+    0.0,
+    30.0,
+    -40.0,
+],
+    [
+    8.855133305450298,
+    -2.210069028768998,
+    4.008035319168533,
+    -7.580543095693663,
+],
+    [
+    32.83294192270985,
+    -10.38496118834563,
+    -30.19337553895401,
+    7.649492138716589,
+],
+    [
+    15.23581094674306,
+    -10.58809596665922,
+    -9.77096383269757,
+    4.954838522679282,
+],
+]
+dependent_momentum_index = -1
+
+[gammaloop_files]
+processed_dot_file = "/shared/vhirshi/nic/tropnis/gl_files/dot_files/photons_eu_processed.dot"
+model_json_file = "/shared/vhirshi/nic/tropnis/gl_files/models/sm.json"
+
+[gammaloop_state]
+state_path = "/shared/vhirshi/gammaloop_hedge_numerator/gl_states/photons_eu_output"
+process_id = 0
+integrand_name = "default"
+
+[tropnis_settings]
+evaluate_real_part = true
+n_cores = 64

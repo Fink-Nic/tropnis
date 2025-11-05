@@ -1,0 +1,41 @@
+[kinematics]
+momenta = [
+    [
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+    ],
+    [
+        1.0,
+        0.0,
+        0.0,
+        -1.0,
+    ],
+    [
+        0.9903067841547669,
+        0.3734458315384239,
+        0.6393671561700484,
+        -0.657613394982612,
+    ],
+    [
+        0.2053558277500182,
+        -0.1412408546154445,
+        -0.0869119059139323,
+        0.121112995127698,
+    ],
+]
+dependent_momentum_index = 0
+
+[gammaloop_files]
+processed_dot_file = "/shared/vhirshi/nic/tropnis/gl_files/dot_files/pentagon_euclidean_processed.dot"
+model_json_file = "/shared/vhirshi/nic/tropnis/gl_files/models/sm.json"
+
+[gammaloop_state]
+state_path = "/shared/vhirshi/gammaloop_hedge_numerator/gl_states/pentagon_euclidean_output"
+process_id = 0
+integrand_name = "default"
+
+[tropnis_settings]
+evaluate_real_part = true
+n_cores = 64

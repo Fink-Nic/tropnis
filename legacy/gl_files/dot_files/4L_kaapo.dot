@@ -1,0 +1,29 @@
+digraph 4L_kaapo{
+    num = "1";
+    overall_factor = "1";
+    projector = "1";
+    
+    A1 [num=0];
+    A2 [num=0];
+    B1 [num=0];
+    B2 [num=0];
+    C1 [num=0];
+    C2 [num=0];
+    D1 [num=0];
+    D2 [num=0];
+    D3 [num=0];
+    D4 [num=0];
+    A1:0 -> D1:1 [source=0, sink=1, id=0, particle="scalar_0", lmb_rep="-K(0,a___)+K(2,a___)"];
+    B1:2 -> D2:3 [source=0, sink=1, id=1, particle="scalar_0", lmb_rep="K(0,a___)-K(1,a___)"];
+    C1:4 -> D3:5 [source=0, sink=1, id=2, particle="scalar_0", lmb_rep="K(1,a___)-K(2,a___)"];
+    A1:6 -> D4:7 [source=0, sink=1, id=3, particle="scalar_0", lmb_id=0, lmb_rep="K(0,a___)"];
+    B1:8 -> C1:9 [source=0, sink=1, id=4, particle="scalar_0", lmb_id=1, lmb_rep="K(1,a___)"];
+    C1:10 -> A1:11 [source=0, sink=1, id=5, particle="scalar_0", lmb_id=2, lmb_rep="K(2,a___)"];
+    A2:12 -> B2:13 [source=0, sink=1, id=6, particle="scalar_0", lmb_rep="-K(0,a___)+K(2,a___)+K(3,a___)"];
+    B2:14 -> C2:15 [source=0, sink=1, id=7, particle="scalar_0", lmb_rep="-K(1,a___)+K(2,a___)+K(3,a___)"];
+    C2:16 -> A2:17 [source=0, sink=1, id=8, particle="scalar_0", lmb_id=3, lmb_rep="K(3,a___)"];
+    D1:18 -> A2:19 [source=0, sink=1, id=9, particle="scalar_1", lmb_rep="-K(0,a___)+K(2,a___)"];
+    D2:20 -> B2:21 [source=0, sink=1, id=10, particle="scalar_1", lmb_rep="K(0,a___)-K(1,a___)"];
+    D3:22 -> C2:23 [source=0, sink=1, id=11, particle="scalar_1", lmb_rep="K(1,a___)-K(2,a___)"];
+    D4:24 -> B1:25 [source=0, sink=1, id=12, particle="scalar_1", lmb_rep="K(0,a___)"];
+}

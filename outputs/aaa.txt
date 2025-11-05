@@ -1,0 +1,13 @@
+photons_eu:
+gammaloop: RSD = 3.30
+momtrop: RSD = 3.02
+trained: RSD = 1.85-1.95
+stabilized after ~ 600 steps à 8192
+unchanged until the end of 2000 steps à 8192
+
+scalar_box:
+gammaloop: RSD = 0.54
+momtrop: RSD = 1.27
+trained: RSD = 0.12-0.13
+stabilized after ~ 700 steps à 8192
+unchanged until the end of 1000 steps à 8192

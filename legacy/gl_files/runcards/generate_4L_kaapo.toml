@@ -1,0 +1,17 @@
+[kinematics]
+momenta = [
+]
+dependent_momentum_index = -1
+
+[gammaloop_files]
+processed_dot_file = "/shared/vhirshi/nic/tropnis/gl_files/dot_files/4L_kaapo.dot"
+model_json_file = "/shared/vhirshi/nic/tropnis/gl_files/models/scalars.json"
+
+[gammaloop_state]
+state_path = "/shared/vhirshi/gammaloop_hedge_numerator/gl_states/scalar_box_output"
+process_id = 0
+integrand_name = "default"
+
+[tropnis_settings]
+evaluate_real_part = true
+n_cores = 64
