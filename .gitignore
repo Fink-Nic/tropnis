@@ -2,6 +2,6 @@ outputs/
 *.Identifier
 tests/
 resources/legacy/
-resources/__pycache__/
+*/__pycache__/
 gl_files/
 .vscode/

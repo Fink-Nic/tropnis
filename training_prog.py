@@ -32,11 +32,23 @@ def main() -> None:
                 PATHS['tropnis'], "outputs", "training_prog")
             print(f"Output will be at {subfolder_path}")
 
-        # Initialize the gammaloop integrand and madnis integrator
+        # Training parameters
         torch.set_default_dtype(torch.float64)
         time_last = time()
-        integrand = GammaLoopIntegrand(
-            settings_file)
+        integrand = GammaLoopIntegrand(settings_file)
+        params = integrand.settings['plotting_params']['training_prog']
+        n_training_steps = params['n_training_steps']
+        n_log = params['n_log']
+        n_plot_rsd = params['n_plot_rsd']
+        n_plot_loss = params['n_plot_loss']
+        n_samples = params['n_samples']
+        n_samples_after_training = params['n_samples_after_training']
+
+        # Initialize the gammaloop integrand and madnis integrator
+        def lr_scheduler(optimizer, eta_min=0.0, last_epoch=-1):
+            return torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer=optimizer, T_max=n_training_steps, eta_min=eta_min, last_epoch=last_epoch)
+        
         discrete_model = integrand.settings['tropnis']['discrete_model']
         discrete_model_params = integrand.momtrop_integrand.Parser.settings[discrete_model]
         batch_size = integrand.settings['tropnis']['batch_size']
@@ -46,18 +58,10 @@ def main() -> None:
             discrete_model=discrete_model,
             discrete_flow_kwargs=discrete_model_params,
             batch_size=batch_size,
+            scheduler=lr_scheduler,
         )
         print(f"Initializing the Integrand and Integrator took {
             - time_last + (time_last := time()):.2f}s")
-
-        # Training parameters
-        params = integrand.settings['plotting_params']['training_prog']
-        n_training_steps = params['n_training_steps']
-        n_log = params['n_log']
-        n_plot_rsd = params['n_plot_rsd']
-        n_plot_loss = params['n_plot_loss']
-        n_samples = params['n_samples']
-        n_samples_after_training = params['n_samples_after_training']
 
         # Callback for the madnis integrator
         def callback(status) -> None:
