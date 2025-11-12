@@ -1,5 +1,5 @@
 # type: ignore
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Dict, Tuple, List
 import momtrop
 import pydot
@@ -18,7 +18,7 @@ class GraphProperties:
     edge_momentum_shifts: list[list[float]]
     graph_external_vertices: list[int]
     graph_signature: list[list[int]]
-    momtrop_edge_weights: list[int] = []
+    momtrop_edge_weights: list[int] = field(default_factory=list)
 
     def __post_init__(self):
         TOLERANCE = 1E-10
@@ -93,7 +93,7 @@ class DotParser:
         self.verbose = verbose
 
     def get_dot_graph(self, process_id: int):
-        return self.graph_file[str(process_id)]
+        return self.graph_file[process_id]
 
     def infer_dependent_momentum(self,
                                  ext_momenta: list[list[float]],
@@ -195,7 +195,6 @@ class DotParser:
         x_, a_ = S('x_', 'a_')
 
         # Set up momtrop sampler
-        TOLERANCE = 1E-10
         n_loops = len(LMB_EDGES)
 
         graph_externals = sorted([v.get("v_id") for v in EXT_VERTICES])
@@ -212,7 +211,6 @@ class DotParser:
             mass = edge.get('mass')
             edge_src_dst_vertices.append((src_id, dst_id))
             edge_masses.append(mass)
-            edge_ismassive.append(mass > TOLERANCE)
 
             # LMB representation parsing
             e: Expression = E(edge.get('lmb_rep')[1:-1])
@@ -255,7 +253,6 @@ class DotParser:
         return GraphProperties(
             edge_src_dst_vertices=edge_src_dst_vertices,
             edge_masses=edge_masses,
-            edge_ismassive=edge_ismassive,
             edge_momentum_shifts=edge_momentum_shifts,
             graph_external_vertices=graph_externals,
             graph_signature=graph_signature,
