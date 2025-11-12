@@ -15,11 +15,17 @@ from resources.helpers import PATHS, deep_update
 class GraphProperties:
     edge_src_dst_vertices: list[(int, int)]
     edge_masses: list[int]
-    edge_ismassive: list[bool]
     edge_momentum_shifts: list[list[float]]
     graph_external_vertices: list[int]
     graph_signature: list[list[int]]
-    momtrop_edge_weights: list[int]
+    momtrop_edge_weights: list[int] = []
+
+    def __post_init__(self):
+        TOLERANCE = 1E-10
+        self.n_loops: int = len(self.graph_signature[0])
+        self.n_edges: int = len(self.edge_masses)
+        self.edge_ismassive: list[bool] = [
+            mass > TOLERANCE for mass in self.edge_masses]
 
 
 class ModelParser:
@@ -80,83 +86,17 @@ class ModelParser:
         return self.get_particle_parameter_from_identifier('name', particle_name, 'mass')
 
 
-class SettingsParser:
-    def __init__(self, settings_path: str, 
-                 verbose: bool = False,
-                 default_path: str = PATHS['default_settings'],):
-        if not os.path.isabs(settings_path):
-            settings_path = os.path.join(PATHS['tropnis'], settings_path)
-        self.settings_path = settings_path
+class DotParser:
+    def __init__(self, dot_path: str, model_path: str, verbose: bool = False):
+        self.graph_file = pydot.graph_from_dot_file(dot_path)
+        self.Model = ModelParser(model_path)
         self.verbose = verbose
-        self.default_path = default_path
-        with open(self.settings_path, 'r') as f:
-            settings = toml.load(f)
-            if settings is None:
-                raise FileExistsError("The path to the settings file must be specified either relative " 
-                                      +"to the tropnis folder or be given as an absolute path.")
-        with open(self.default_path, 'r') as f:
-            default_settings = toml.load(f)
-        self.settings = deep_update(default_settings, settings)
-        self.gammaloop_state_path = os.path.join(PATHS['gammaloop_states'], 
-                                                 self.settings['gammaloop_state']['state_name'])
-        self.gammaloop_runcard_path = os.path.join(self.gammaloop_state_path, 
-                                                   self.settings['gammaloop_state']['runcard_name'])
-        self.dot_path = os.path.join(self.gammaloop_state_path,
-                                PATHS['state_to_dot'], 
-                                self.settings['gammaloop_state']['process_name'],
-                                self.settings['gammaloop_state']['integrand_name']+".dot")
-        self.model_path = os.path.join(self.gammaloop_state_path,
-                                       self.settings['gammaloop_state']['model_name'])
-    
-    def get_gammaloop_integration_result(self):
-        result_path = os.path.join(PATHS['gammaloop_states'],
-                                   self.settings['gammaloop_state']['integration_state_name'], 
-                                   self.settings['gammaloop_state']['integration_result_file'])
-        with open(result_path, 'r') as f:
-            gammaloop_result = json.load(f)
-        
-        return gammaloop_result
 
-    def get_dot_graph(self):
-        return pydot.graph_from_dot_file(self.dot_path)[self.settings['gammaloop_state']['process_id']]
-    
-    def get_model(self):
-        return ModelParser(self.model_path)
+    def get_dot_graph(self, process_id: int):
+        return self.graph_file[str(process_id)]
 
-    def get_gl_state(self) -> GammaLoopAPI:
-        return GammaLoopAPI(self.gammaloop_state_path)
-
-    def get_gl_integrand(self) -> Callable[[np.ndarray], np.ndarray]:
-        def gammaloop_integrand(loop_momenta: np.ndarray,
-                                state: GammaLoopAPI | None = None) -> np.ndarray:
-            if state is None:
-                state = self.get_gl_state()
-            discrete_dims = np.zeros(
-                (loop_momenta.shape[0], 1), dtype=np.uint64)
-            res, jac = state.batched_inspect(
-                points=loop_momenta, momentum_space=True,
-                process_id=self.settings['gammaloop_state']['process_id'],
-                integrand_name=self.settings['gammaloop_state']['integrand_name'],
-                use_f128=False,  discrete_dims=discrete_dims
-            )
-            return res.real if self.settings['tropnis']['evaluate_real_part'] else res.imag
-
-        return gammaloop_integrand
-    
-    def get_ext_momenta(self) -> Tuple[List[List[float]], int]:
-        with open(self.gammaloop_runcard_path, 'r') as f:
-            momenta_raw = f.read().split("momenta")[1].split("helicities")[0]
-        before, after = momenta_raw.split("\"dependent\",")
-        before = "list" + before + "]"
-        after = "list = [" + after
-        before, after = toml.loads(before)['list'], toml.loads(after)['list']
-        dependent_momentum_index = len(before)
-        momenta = before + after
-
-        return momenta, dependent_momentum_index
-    
-    def infer_dependent_momentum(self, 
-                                 ext_momenta: list[list[float]], 
+    def infer_dependent_momentum(self,
+                                 ext_momenta: list[list[float]],
                                  ext_sigs: list[int],
                                  dependent_momentum_index: int) -> list[float]:
         # Infering the dependent momentum from momentum conservation
@@ -183,33 +123,20 @@ class SettingsParser:
             print("------------ INFERED EXTERNAL MOMENTUM --------------")
             print(f"{dependent_momentum=}")
             print(f"{test_mom_cons=} SHOULD BE ZERO")
-        
+
         return ext_momenta
 
-    def get_momtrop_sampler(self) -> Tuple[momtrop.Sampler, momtrop.EdgeData, momtrop.Settings]:
-        gp = self.get_graph_properties()
-        mt_edges = [momtrop.Edge(src_dst, ismassive, weight) for src_dst, ismassive, weight
-                    in zip(gp.edge_src_dst_vertices, gp.edge_ismassive, gp.momtrop_edge_weights)]
-        assym_graph = momtrop.Graph(mt_edges, gp.graph_external_vertices)
-        momentum_shifts = [momtrop.Vector(*shift) for shift in gp.edge_momentum_shifts]
-        sampler = momtrop.Sampler(assym_graph, gp.graph_signature)
-        edge_data = momtrop.EdgeData(gp.edge_masses, momentum_shifts)
-        sampler_settings = momtrop.Settings(False, False)
-
-        return sampler, edge_data, sampler_settings
-    
-    def get_graph_properties(self) -> GraphProperties:
+    def get_graph_properties(self, process_id: int,
+                             ext_momenta: List[List[float]],
+                             dependent_momentum_index: int) -> GraphProperties:
         from symbolica import E, S, Expression
 
-        model = self.get_model()
-
         # External momenta
-        ext_momenta, dependent_momentum_index = self.get_ext_momenta()
         n_ext_mom = len(ext_momenta) + 1
         ext_sigs = n_ext_mom*[0.]
 
         # Dot graph
-        graph = self.get_dot_graph()
+        graph = self.get_dot_graph(process_id)
         edges = graph.get_edges()
         vertices = graph.get_nodes()
 
@@ -249,14 +176,16 @@ class SettingsParser:
             else:
                 INT_EDGES.append(edge)
                 particle_name = edge.get('particle')[1:-1]
-                edge.set('mass', model.get_particle_mass_from_name(particle_name)[0])
+                edge.set('mass', self.Model.get_particle_mass_from_name(
+                    particle_name)[0])
                 src_vert = graph.get_node(edge.get('src'))[0]
                 dst_vert = graph.get_node(edge.get('dst'))[0]
                 edge.set('src_id', src_vert.get('v_id'))
                 edge.set('dst_id', dst_vert.get('v_id'))
-        
+
         # Infer the missing external momentum
-        ext_momenta = self.infer_dependent_momentum(ext_momenta, ext_sigs, dependent_momentum_index)
+        ext_momenta = self.infer_dependent_momentum(
+            ext_momenta, ext_sigs, dependent_momentum_index)
 
         # Symbolica setup for LMB representation parsing
         # P: External momenta
@@ -268,25 +197,7 @@ class SettingsParser:
         # Set up momtrop sampler
         TOLERANCE = 1E-10
         n_loops = len(LMB_EDGES)
-        n_int_edges = len(INT_EDGES)
-        edge_weights = self.settings['momtrop']['edge_weight']
-        match edge_weights:
-            case int() | float():
-                edge_weights = n_int_edges*[float(edge_weights)]
-            case [_, *_]:
-                if not len(edge_weight) == n_int_edges:
-                    raise ValueError("If provided as a sequence, the number of momtrop "
-                                     + "edgeweights must match the number of propagators.")
-                edge_weights = edge_weights
-            case "default":
-                default_weight = (3*n_loops + 3/2)/n_int_edges/2
-                edge_weights = n_int_edges*[default_weight]
-                if self.verbose:
-                    print(f"Setting momtrop edge weights to default: {default_weight:.5f}")
-            case _:
-                raise ValueError("Momtrop edge weights must be one of: \n"
-                                 +"Number, Sequence of Numbers or \"default\".")
-        
+
         graph_externals = sorted([v.get("v_id") for v in EXT_VERTICES])
         graph_signature = []
         edge_momentum_shifts = []
@@ -348,5 +259,121 @@ class SettingsParser:
             edge_momentum_shifts=edge_momentum_shifts,
             graph_external_vertices=graph_externals,
             graph_signature=graph_signature,
-            momtrop_edge_weights=edge_weights,
+        )
+
+
+class SettingsParser:
+    def __init__(self, settings_path: str,
+                 verbose: bool = False,
+                 default_path: str = PATHS['default_settings'],):
+        if not os.path.isabs(settings_path):
+            settings_path = os.path.join(PATHS['tropnis'], settings_path)
+        self.settings_path = settings_path
+        self.verbose = verbose
+        self.default_path = default_path
+        with open(self.settings_path, 'r') as f:
+            settings = toml.load(f)
+            if settings is None:
+                raise FileExistsError("The path to the settings file must be specified either relative "
+                                      + "to the tropnis folder or be given as an absolute path.")
+        with open(self.default_path, 'r') as f:
+            default_settings = toml.load(f)
+        self.settings = deep_update(default_settings, settings)
+        self.gammaloop_state_path = os.path.join(PATHS['gammaloop_states'],
+                                                 self.settings['gammaloop_state']['state_name'])
+        self.gammaloop_runcard_path = os.path.join(self.gammaloop_state_path,
+                                                   self.settings['gammaloop_state']['runcard_name'])
+        self.dot_path = os.path.join(self.gammaloop_state_path,
+                                     PATHS['state_to_dot'],
+                                     self.settings['gammaloop_state']['process_name'],
+                                     self.settings['gammaloop_state']['integrand_name']+".dot")
+        self.model_path = os.path.join(self.gammaloop_state_path,
+                                       self.settings['gammaloop_state']['model_name'])
+
+    def get_gammaloop_integration_result(self):
+        result_path = os.path.join(PATHS['gammaloop_states'],
+                                   self.settings['gammaloop_state']['integration_state_name'],
+                                   self.settings['gammaloop_state']['integration_result_file'])
+        with open(result_path, 'r') as f:
+            gammaloop_result = json.load(f)
+
+        return gammaloop_result
+
+    def get_model(self):
+        return ModelParser(self.model_path)
+
+    def get_gl_state(self) -> GammaLoopAPI:
+        return GammaLoopAPI(self.gammaloop_state_path)
+
+    def get_graph_properties(self) -> GraphProperties:
+        Dot = DotParser(self.dot_path, self.model_path, self.verbose)
+        ext_momenta, dmi = self.get_ext_momenta()
+        graph_properties = Dot.get_graph_properties(
+            self.settings['gammaloop_state']['process_id'], ext_momenta, dmi)
+        n_int_edges = graph_properties.n_edges
+
+        edge_weights = self.settings['momtrop']['edge_weight']
+        match edge_weights:
+            case int() | float():
+                edge_weights = n_int_edges*[float(edge_weights)]
+            case [_, *_]:
+                if not len(edge_weights) == n_int_edges:
+                    raise ValueError("If provided as a sequence, the number of momtrop "
+                                     + "edgeweights must match the number of propagators.")
+                edge_weights = edge_weights
+            case "default":
+                default_weight = (
+                    3*graph_properties.n_loops + 3/2)/n_int_edges/2
+                edge_weights = n_int_edges*[default_weight]
+                if self.verbose:
+                    print(
+                        f"Setting momtrop edge weights to default: {default_weight:.5f}")
+            case _:
+                raise ValueError("Momtrop edge weights must be one of: \n"
+                                 + "Number, Sequence of Numbers or \"default\".")
+
+        graph_properties.momtrop_edge_weights = edge_weights
+
+        return graph_properties
+
+    def get_gl_integrand(self) -> Callable[[np.ndarray], np.ndarray]:
+        def gammaloop_integrand(loop_momenta: np.ndarray,
+                                state: GammaLoopAPI | None = None) -> np.ndarray:
+            if state is None:
+                state = self.get_gl_state()
+            discrete_dims = np.zeros(
+                (loop_momenta.shape[0], 1), dtype=np.uint64)
+            res, jac = state.batched_inspect(
+                points=loop_momenta, momentum_space=True,
+                process_id=self.settings['gammaloop_state']['process_id'],
+                integrand_name=self.settings['gammaloop_state']['integrand_name'],
+                use_f128=False,  discrete_dims=discrete_dims
             )
+            return res.real if self.settings['tropnis']['evaluate_real_part'] else res.imag
+
+        return gammaloop_integrand
+
+    def get_ext_momenta(self) -> Tuple[List[List[float]], int]:
+        with open(self.gammaloop_runcard_path, 'r') as f:
+            momenta_raw = f.read().split("momenta")[1].split("helicities")[0]
+        before, after = momenta_raw.split("\"dependent\",")
+        before = "list" + before + "]"
+        after = "list = [" + after
+        before, after = toml.loads(before)['list'], toml.loads(after)['list']
+        dependent_momentum_index = len(before)
+        momenta = before + after
+
+        return momenta, dependent_momentum_index
+
+    def get_momtrop_sampler(self, gp: GraphProperties
+                            ) -> Tuple[momtrop.Sampler, momtrop.EdgeData, momtrop.Settings]:
+        mt_edges = [momtrop.Edge(src_dst, ismassive, weight) for src_dst, ismassive, weight
+                    in zip(gp.edge_src_dst_vertices, gp.edge_ismassive, gp.momtrop_edge_weights)]
+        assym_graph = momtrop.Graph(mt_edges, gp.graph_external_vertices)
+        momentum_shifts = [momtrop.Vector(*shift)
+                           for shift in gp.edge_momentum_shifts]
+        sampler = momtrop.Sampler(assym_graph, gp.graph_signature)
+        edge_data = momtrop.EdgeData(gp.edge_masses, momentum_shifts)
+        sampler_settings = momtrop.Settings(False, False)
+
+        return sampler, edge_data, sampler_settings

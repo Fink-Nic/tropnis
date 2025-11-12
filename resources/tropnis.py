@@ -66,10 +66,12 @@ class MomtropIntegrand:
             edge_weights = sampler_properties.edge_weights
             mt_edges = [momtrop.Edge(src_dst, ismassive, weight) for src_dst, ismassive, weight
                         in zip(edge_src_dst, edge_ismassive, edge_weights)]
-            assym_graph = momtrop.Graph(mt_edges, sampler_properties.graph_externals)
-            self.sampler = momtrop.Sampler(assym_graph, sampler_properties.graph_signature)
-            
-        momentum_shifts = [momtrop.Vector(*offset) for offset 
+            assym_graph = momtrop.Graph(
+                mt_edges, sampler_properties.graph_externals)
+            self.sampler = momtrop.Sampler(
+                assym_graph, sampler_properties.graph_signature)
+
+        momentum_shifts = [momtrop.Vector(*offset) for offset
                            in self.sampler_properties.momentum_shifts]
         self.edge_data = momtrop.EdgeData(
             self.sampler_properties.edge_masses, momentum_shifts)
@@ -174,10 +176,12 @@ class GammaLoopWorker:
     #     Process(target=self.worker, args=(runcard,
     #         q_in, q_out), daemon=self.daemon).start()
 
-def gammaloop_worker(settings_file: str, 
+
+def gammaloop_worker(settings_file: str,
                      q_in: Queue, q_out: Queue, stop_event,
                      sampler_properties: MomtropSamplerProperties | None = None,) -> None:
-    integrand = MomtropIntegrand(settings_file, sampler_properties=sampler_properties)
+    integrand = MomtropIntegrand(
+        settings_file, sampler_properties=sampler_properties)
     gammaloop_state = integrand.Parser.get_gl_state()
     q_out.put("STARTED")
     while not stop_event.is_set():
@@ -193,6 +197,7 @@ def gammaloop_worker(settings_file: str,
             xs, indices, gammaloop_state)
         q_out.put((res, chunk_id))
 
+
 class GammaLoopIntegrand:
     MAX_CHUNK_SIZE = 10_000
     q_in, q_out = Queue(), Queue()
@@ -204,20 +209,22 @@ class GammaLoopIntegrand:
         self.settings = self.momtrop_integrand.settings
         self.sampler_properties = self.momtrop_integrand.sampler_properties
         if n_cores is None:
-            self.n_cores  = self.settings['tropnis']['n_cores']
+            self.n_cores = self.settings['tropnis']['n_cores']
         else:
             self.n_cores = n_cores
         for _ in range(self.n_cores):
-            Process(target=gammaloop_worker, 
-                    args=(settings_file, self.q_in, self.q_out, self.stop_event, self.sampler_properties), 
+            Process(target=gammaloop_worker,
+                    args=(settings_file, self.q_in, self.q_out,
+                          self.stop_event, self.sampler_properties),
                     daemon=False).start()
         for core in range(self.n_cores):
             output = self.q_out.get()
-            if output =="STARTED":
+            if output == "STARTED":
                 if self.verbose:
                     print(f"Core {core} has been initialized.")
             else:
-                raise ValueError("Unexpected initialization value in queue: {output}")
+                raise ValueError(
+                    "Unexpected initialization value in queue: {output}")
 
     def eval_integrand(self, x_all: torch.Tensor) -> torch.Tensor:
         continuous_dim = self.momtrop_integrand.continuous_dim
@@ -235,7 +242,7 @@ class GammaLoopIntegrand:
             discrete_dims=discrete_dims,
             discrete_prior_prob_function=self.momtrop_integrand.predict_discrete_probs,
         )
-    
+
     def end(self) -> None:
         self.stop_event.set()
         try:
@@ -243,7 +250,7 @@ class GammaLoopIntegrand:
                 self.q_in.put("STOP")
         except:
             print(f"Queues have already been closed")
-        
+
     def __call__(self, xs: torch.Tensor, indices: torch.Tensor) -> IntegrandSample:
         assert (ln := len(indices)) == len(
             xs), "indices and x must be of same length"
@@ -265,6 +272,6 @@ class GammaLoopIntegrand:
             result_sorted[chunk_id] = res
 
         return merge(result_sorted)
-    
+
     def __del__(self):
         self.end()
