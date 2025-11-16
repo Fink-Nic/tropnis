@@ -140,10 +140,10 @@ class DotParser:
         edges = graph.get_edges()
         vertices = graph.get_nodes()
 
-        VERTICES = []
-        LMB_EDGES = []
-        EXT_VERTICES = []
-        INT_EDGES = []
+        VERTICES: list[pydot.Node] = []
+        LMB_EDGES: list[pydot.Edge] = []
+        EXT_VERTICES: list[pydot.Node] = []
+        INT_EDGES: list[pydot.Edge] = []
 
         # Filter out the external vertices
         for vert in vertices:

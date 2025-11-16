@@ -1,0 +1,20 @@
+[gammaloop_state]
+state_name = "scalar_4_point_6_loop_output"
+integration_state_name = "integration_scalar_4_point_6_loop"
+process_name = "scalar_4_point_6_loop"
+
+[tropnis]
+batch_size = 32768
+evaluate_real_part = true
+n_cores = 32
+discrete_model = "transformer"
+
+[momtrop]
+edge_weight = 0.70588235294
+
+[transformer]
+embedding_dim = 128
+feedforward_dim = 256
+heads = 8
+mlp_units = 128
+transformer_layers = 2

@@ -1,0 +1,20 @@
+[gammaloop_state]
+state_name = "scalar_3_point_1_loop_output"
+integration_state_name = "integration_scalar_3_point_1_loop"
+process_name = "scalar_3_point_1_loop"
+
+[tropnis]
+batch_size = 2048
+evaluate_real_part = false
+n_cores = 32
+discrete_model = "transformer"
+
+[momtrop]
+edge_weight = 0.83333333333
+
+[transformer]
+embedding_dim = 64
+feedforward_dim = 64
+heads = 2
+mlp_units = 64
+transformer_layers = 1

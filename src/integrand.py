@@ -7,26 +7,99 @@ from typing import Dict, List, Sequence, Callable
 from multiprocessing import Process, Queue, Event
 
 import momtrop
+try:
+    from gammaloop import GammaLoopAPI
+except:
+    pass
 from madnis.integrator import Integrand as MadnisIntegrand
-from src.parser import SettingsParser
-from src.parameterisation import Parameterisation, LayerOutput
+try:
+    from src.parser import SettingsParser
+except:
+    pass
+from src.parameterisation import Parameterisation, LayerOutput, GraphProperties
 
 
 @dataclass
 class IntegrandResult:
-    samples: torch.Tensor
+    samples: np.ndarray
 
 
 class Integrand(ABC):
+    identifier = "ABCIntegrand"
+
+    def __init__(self,
+                 continuous_dim: int,
+                 discrete_dims: List[int] = []):
+        self.continuous_dim = continuous_dim
+        self.discrete_dims = discrete_dims
+
+    @abstractmethod
+    def _evaluate_batch(self, continuous: torch.Tensor, discrete: torch.Tensor) -> torch.Tensor:
+        pass
+
+    def evaluate_batch(self, layer_input: LayerOutput) -> LayerOutput:
+        jacobians, continuous, discrete = layer_input.x_all.tensor_split(
+            [1, 1 + self.continuous_dim], dim=1)
+
+        res = jacobians * \
+            self._evaluate_batch(continuous, discrete).reshape(-1, 1)
+        layer_input.overwrite_x_all(res, self.identifier)
+
+        return layer_input
+
+    def __call__(self, layer_input: LayerOutput) -> LayerOutput:
+        return self.evaluate_batch(layer_input)
+
+
+class TestIntegrand(Integrand):
+    """
+    Implements a normalized multivariate gaussian that integrates to unity.
+    """
+    identifier = "Test Integrand"
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def _evaluate_batch(self, continuous: torch.Tensor, _: torch.Tensor) -> torch.Tensor:
+        norm_factor = (2*torch.pi)**(continuous.shape[1]/2)
+
+        return (-continuous.norm(p=2, dim=1).pow(2)/2).exp() / norm_factor
+
+
+class GammaLoopIntegrand(Integrand):
+    def __init__(self,
+                 gammaloop_state_path: str,
+                 process_id: int = 0,
+                 integrand_name: str = "default",
+                 use_f128: bool = False,
+                 momentum_space: bool = True,
+                 **kwargs):
+        self.gammaloop_state = GammaLoopAPI(gammaloop_state_path)
+        self.process_id = process_id
+        self.integrand_name = integrand_name
+        self.use_f128 = use_f128
+        self.momentum_space = momentum_space
+        super().__init__(**kwargs)
+
+    def _evaluate_batch(self, continuous: torch.Tensor, _: torch.Tensor) -> torch.Tensor:
+        discrete_dims = np.zeros(
+            (continuous.shape[0], 1), dtype=np.uint64)
+        res, _ = self.gammaloop_state.batched_inspect(
+            points=continuous.detach().cpu().numpy(), momentum_space=self.momentum_space,
+            process_id=self.process_id,
+            integrand_name=self.integrand_name,
+            use_f128=self.use_f128,  discrete_dims=discrete_dims
+        )
+        return res
+
+
+class ParameterisedIntegrand:
     MAX_CHUNK_SIZE = 10_000
     q_in, q_out = Queue(), Queue()
     stop_event = Event()
 
     def __init__(self,
-                 continuous_dim: int = 0,
-                 discrete_dims: List[int] = [],
-                 param_init: Callable[any, Parameterisation],
-                 param_kwargs: Dict[str, any] = {},
+                 settings_file,
                  condition_integrand_first: bool = False,
                  ):
         self.continuous_dim = continuous_dim
@@ -37,7 +110,7 @@ class Integrand(ABC):
         self.param = self._get_param_instance()
 
     @abstractmethod
-    def integrate_batch(self, continuous: torch.Tensor, discrete: torch.Tensor) -> torch.Tensor:
+    def evaluate_batch(self, continuous: torch.Tensor, discrete: torch.Tensor) -> torch.Tensor:
         pass
 
     @abstractmethod
@@ -51,7 +124,7 @@ class Integrand(ABC):
         return self.param.get_chain_discrete_dims + self.discrete_dims
 
     def get_chain_continuous_dims(self) -> int:
-        return self.continuous_dim + self.param.get_chain_continuous_dim
+        return self.continuous_dim + self.param.get_chain_continuous_dim()
 
     def _get_param_instance(self) -> Parameterisation:
         return self.param_init(**self.param_kwargs)
@@ -69,7 +142,7 @@ class Integrand(ABC):
             discrete_prior_prob_function=self.discrete_prior_prob_function,
         )
 
-    def eval_integrand(self, x_all: torch.Tensor) -> torch.Tensor:
+    def eval_integrand(self, layer_input: torch.Tensor) -> torch.Tensor:
         pass
 
     def end(self) -> None:

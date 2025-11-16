@@ -37,13 +37,15 @@ def chunks(ary: Sequence, n_chunks: int) -> List[Sequence]:
     return long_chunks + short_chunks
 
 
-def deep_update(orig_dict: Dict, new_dict: Dict):
+def overwrite_settings(orig_dict: Dict, new_dict: Dict):
     """
-    Used to Overwrite the default settings with the specified settings file
+    Used to Overwrite the default settings with the specified settings file.
     """
+    if "parameterisation" in new_dict.keys():
+        orig_dict["parameterisation"] = new_dict["parameterisation"]
     for key, val in new_dict.items():
         if isinstance(val, Mapping):
-            tmp = deep_update(orig_dict.get(key, {}), val)
+            tmp = overwrite_settings(orig_dict.get(key, {}), val)
             orig_dict[key] = tmp
         elif isinstance(val, list):
             orig_dict[key] = (orig_dict.get(key, []) + val)

@@ -1,0 +1,60 @@
+# -------------------------------------------------------------------------------------------
+# Default settings file, remember to point to this file in resources/PATHS.json
+# Setting files should not include parameters that are not specified in here
+# -------------------------------------------------------------------------------------------
+[gammaloop_state]
+# Name of the gammaloop state folder. REQUIRED TO BE OVERWRITTEN
+state_name = "default"
+# Name of the process inside the gammaloop state. REQUIRED TO BE OVERWRITTEN
+process_name = "default"
+# Name of the gammaloop integration state folder
+integration_state_name = "default"
+# Name of the integration results file inside the integration_state_name folder
+integration_result_file = "integration_results.txt"
+process_id = 0
+integrand_name = "default"
+# Name of the model file inside the state_name folder
+model_name = "model.json"
+# Name of the runcard file inside the state_name folder
+runcard_name = "run.toml"
+
+[tropnis]
+# Batchsize used to train the model
+batch_size = 1024
+# Currently, only either the real or imaginary part of the integrand is evaluated and used for training
+evaluate_real_part = true
+n_cores = 32
+# Choose between "transformer" and "made"
+discrete_model = "transformer"
+
+[momtrop]
+# Can be one of the following:
+# "default": Automatically sets a weight, pretty likely to lead to divergent subgraphs
+# float: Sets all edge weights to the same value
+# list[float]: Specify a weight for each edge. Length must match the number of internal edges.
+edge_weight = "default"
+
+# Parameters for the transformer model, should be passed as kwargs, see training_prog.py
+[transformer]
+embedding_dim = 64
+feedforward_dim = 64
+heads = 4
+mlp_units = 64
+transformer_layers = 1
+
+# Haven't bothered with the non-transformer model yet, will use default params set by madnis
+[made]
+
+# Parameters used in the training_prog.py file
+[plotting_params.training_prog]
+n_training_steps = 1000
+# Training steps between callback of loss to console
+n_log = 20
+# Training steps between drawing n_samples samples to calculate the rel. std. (rsd)
+# Will also output the result +- error and rsd to console
+n_plot_rsd = 50
+# Training steps between plotting the loss
+n_plot_loss = 2
+n_samples = 40000
+# Number of samples drawn after the training to compute the final result
+n_samples_after_training = 100000
