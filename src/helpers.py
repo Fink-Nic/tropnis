@@ -63,8 +63,10 @@ def error_fmter(value: float, error: float, prec_error: int = 2) -> str:
         value = 12.345, error = 111.111, prec_error = 1 -> "1.2(11.1)e+01"
         value = 0.0123, error = 0.001234, prec_error = 3 -> "1.230(123)e-02"
     """
-    if error <= 0:
+    if error < 0:
         raise ValueError("Error must be positive.")
+    if error == 0:
+        return f"{value:.{prec_error}g} ZERO ERROR INPUT"
     if prec_error < 1:
         raise ValueError(
             "Number of significant digits should be at least 1, or there is no reason to use this function.")
@@ -73,7 +75,7 @@ def error_fmter(value: float, error: float, prec_error: int = 2) -> str:
         log10val = 0
     else:
         log10val = math.floor(math.log10(abs(value)))
-    exp10val = 10**log10val
+    exp10val = 10.0**log10val
 
     # Normalize both value and error to the same order of magnitude
     val_norm = value / exp10val
@@ -86,14 +88,14 @@ def error_fmter(value: float, error: float, prec_error: int = 2) -> str:
     if log10err_norm >= 0:
         prec = prec_error
     else:
-        prec = prec_error - log10err_norm
+        prec = prec_error - log10err_norm - 1
 
     # Get digits without scientific notation
     val_str = f"{val_norm:.{prec}f}"
     if log10err_norm >= 0:
         err_str = f"{err_norm:.{prec}f}"
     else:
-        err_str = f"{err_norm:.{prec - 1}f}".replace(".", "")[-prec_error:]
+        err_str = f"{err_norm:.{prec}f}".replace(".", "")[-prec_error:]
     # I don't think this can happen since error>0, but if the error is somehow rounded
     # down to zero, err_str will be empty and we default to
     if not err_str:

@@ -1,14 +1,9 @@
-[gammaloop_state]
-state_name = "physical_1L_6photons_output"
-integration_state_name = "integration_physical_1L_6photons"
-process_name = "physical_1L_6photons"
-
 [tropnis]
 batch_size = 8192
 evaluate_real_part = true
 n_cores = 32
 discrete_model = "transformer"
-is_vacuum = false
+is_vacuum = true
 
 [momtrop]
 edge_weight = 0.555555555555
@@ -22,9 +17,6 @@ transformer_layers = 2
 
 [parameterisation.layer_0]
 param_type = "kaapo"
-mu = 3.14
-a = 0.1
-b = 1.0
 
 [parameterisation.layer_1]
 param_type = "inverse spherical"
@@ -32,3 +24,6 @@ conformal_scale = 10.0
 
 [parameterisation.layer_2]
 param_type = "momtrop"
+
+[integrand]
+integrand_type = "kaapo"

@@ -18,3 +18,14 @@ feedforward_dim = 256
 heads = 8
 mlp_units = 128
 transformer_layers = 2
+
+[parameterisation.layer_0]
+param_type = "momtrop"
+
+[integrand]
+integrand_type = "gammaloop"
+gammaloop_state_path =  "/shared/vhirshi/gammaloop_hedge_numerator/gl_states/physical_1L_6photons_output"
+process_id = 0
+integrand_name = "default"
+use_f128 = false
+momentum_space = true

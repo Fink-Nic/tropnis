@@ -26,6 +26,7 @@ evaluate_real_part = true
 n_cores = 32
 # Choose between "transformer" and "made"
 discrete_model = "transformer"
+is_vacuum = false
 
 [momtrop]
 # Can be one of the following:
@@ -58,3 +59,14 @@ n_plot_loss = 2
 n_samples = 40000
 # Number of samples drawn after the training to compute the final result
 n_samples_after_training = 100000
+
+[parameterisation.layer_0]
+param_type = "momtrop"
+
+[integrand]
+integrand_type = "gammaloop"
+gammaloop_state_path =  "/shared/vhirshi/gammaloop_hedge_numerator/gl_states/physical_1L_6photons_output"
+process_id = 0
+integrand_name = "default"
+use_f128 = false
+momentum_space = true

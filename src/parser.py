@@ -100,6 +100,8 @@ class DotParser:
                                  ext_sigs: list[int],
                                  dependent_momentum_index: int) -> list[float]:
         # Infering the dependent momentum from momentum conservation
+        if len(ext_momenta) == 0:
+            return []
         dmi = dependent_momentum_index
         dm_sig = ext_sigs[dmi]
         dependent_momentum = 4*[0.]
@@ -202,7 +204,6 @@ class DotParser:
         edge_momentum_shifts = []
         edge_src_dst_vertices = []
         edge_masses = []
-        edge_ismassive = []
 
         for edge in INT_EDGES:
             # Generate the momtrop edge
@@ -351,6 +352,8 @@ class SettingsParser:
         return gammaloop_integrand
 
     def get_ext_momenta(self) -> Tuple[List[List[float]], int]:
+        if self.settings['tropnis']['is_vacuum']:
+            return [], -1
         with open(self.gammaloop_runcard_path, 'r') as f:
             momenta_raw = f.read().split("momenta")[1].split("helicities")[0]
         before, after = momenta_raw.split("\"dependent\",")

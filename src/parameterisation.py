@@ -27,49 +27,6 @@ class GraphProperties:
             mass > TOLERANCE for mass in self.edge_masses]
 
 
-"""
-Example chain for Kaapo vacuum diagrams:
-MadNIS -> Momtrop -> inverse spherical param -> Kaapos modified spherical param ->  Integrand
------------------------------------------------------------------------------------
-So then, what should be passed along?
------------------------------------------------------------------------------------
-MadNIS or HAVANA ##################################################################
-args: kwargs (settings_files)
-consumes: Nothing
-outputs x_all
-passes along: kwargs
-vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
-MOMTROP or FORWARD PARAM ##########################################################
-args: x_all, kwargs
-consumes x_all[:, continuous_dim:] and xall[:, :len(discrete_dims)].long()
-outputs: jacobians, loop_momenta
-passes along: remaining x_all, kwargs
-vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
-#########################################
-INVERSE SPHERICAL PARAM or BACKWARD PARAM
-args: jacobians, loop_momenta, x_all, kwargs
-consumes: Nothing
-outputs: jacobians, x_points
-passes along: remaining x_all, kwargs
-vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
-##################################
-KAAPOS MODIFIED SPHERICAL PARAM or FORWARD PARAM
-args: jacobians, x_points, x_all, kwargs
-consumes: Nothing
-outputs: jacobians, loop_momenta
-passes along: remaining x_all, kwargs
-vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
-INTEGRAND #########################################################################
-args: jacobians, loop_momenta, x_all, kwargs
-consumes: Remaining x_all
-outputs: func_val
-passes along: Nothing
-
-HOW ABOUT:
-Each parameterisation could add all of its data to the x_all tensor
-"""
-
-
 @dataclass
 class LayerOutput:
     x_all: torch.Tensor
@@ -461,17 +418,17 @@ class MomtropParameterisation(Parameterisation):
             return full_graph.tolist()
 
         mask = torch.nn.functional.one_hot(
-            edges_removed, num_classes=self.layer_num_discrete_dims)
+            edges_removed, num_classes=self.layer_num_discrete_dims).sum(dim=1)
         # Append the edges that are not in discrete, meaning where onehot is zero
         remaining_edges = full_graph[mask == 0].reshape(len(edges_removed), -1)
 
         return torch.hstack([edges_removed, remaining_edges]).tolist()
 
-    """ def _layer_prior_prob_function(self, indices: torch.Tensor) -> torch.Tensor:
+    def _layer_prior_prob_function(self, indices: torch.Tensor) -> torch.Tensor:
         rust_result = self.momtrop_sampler.predict_discrete_probs(
-            indices.tolist())")
+            indices.tolist())
 
-        return torch.tensor(rust_result) """
+        return torch.tensor(rust_result)
 
     def _layer_continuous_dim_in(self) -> int:
         return self.momtrop_sampler.get_dimension()
@@ -587,18 +544,22 @@ class InverseSphericalParameterisation(Parameterisation):
 class KaapoParameterisation(Parameterisation):
     identifier = "kaapo"
 
-    def __init__(self, mu: float = torch.pi, a: float = 0.2, b: float = 1.0, **kwargs):
+    def __init__(self, mu: float = torch.pi, m_e: float = 0.0, a: float = 0.2, b: float = 1.0, **kwargs):
         self.mu = mu
+        self.m_e = m_e
         self.a = a
         self.b = b
         super().__init__(**kwargs)
 
     def _layer_parameterise(self, continuous: torch.Tensor, _: torch.Tensor
                             ) -> Tuple[torch.Tensor, torch.Tensor]:
+        # For easier reading
         n_loops = self.graph_properties.n_loops
+        a = self.a
+        b = self.b
 
-        # Massless propagators (for now)
-        p_F = self.mu
+        # Fermi momentum
+        p_F = max(self.mu**2 - self.m_e**2, 0)**0.5
 
         loop_momenta = torch.zeros_like(continuous)
 
@@ -611,19 +572,25 @@ class KaapoParameterisation(Parameterisation):
             _end = self.N_SPATIAL_DIMS*(i_loop + 1)
 
             xs = continuous[:, _start: _end]
-            x, y, z = xs.tensor_split([1, 2], dim=1)
+            x1, x2, x3 = xs.tensor_split([1, 2], dim=1)
 
-            cos_az = (2*y-1)
-            sin_az = (torch.ones_like(x) - cos_az.pow(2)).sqrt()
-            pol = 2*torch.pi*z
+            cos_az = (2*x2-1)
+            sin_az = (torch.ones_like(x1) - cos_az.pow(2)).sqrt()
+            pol = 2*torch.pi*x3
 
-            peak_F: torch.Tensor = self.b**self.a * x / (1 - x) - p_F**self.a
-            h = p_F + peak_F.sgn() * peak_F.abs().pow(1 / self.a)
-            ks = h * torch.hstack(
+            # Discriminator around the fermi surface
+            peak_F: torch.Tensor = b**a * x1 / (1 - x1) - p_F**a
+
+            # Radial component
+            h_c = p_F + peak_F.sgn() * peak_F.abs().pow(1 / a)
+
+            # Standard spherical parameterisation, scaled by h_c
+            k_vec = h_c * torch.hstack(
                 [sin_az * pol.cos(), sin_az * pol.sin(), cos_az])
-            loop_momenta[:, _start: _end] = ks
+            loop_momenta[:, _start: _end] = k_vec
 
-            jacobians *= h.pow(2) * (h - p_F).abs().pow(1 - self.a) \
-                * (peak_F.sgn() * (h - p_F).abs().pow(self.a) + p_F**self.a + self.b**self.a).pow(2)
+            # The non-constant part of the jacobian
+            jacobians *= h_c.pow(2) * peak_F.abs().pow(1 / a - 1) 
+            jacobians *= (peak_F.abs() + p_F**a + b**a).pow(2)
 
         return jacobians, loop_momenta

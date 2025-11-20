@@ -2,20 +2,23 @@
 import math
 import torch
 import numpy as np
+import multiprocessing as mp
 from abc import ABC, abstractmethod
 from typing import Dict, List, Sequence, Callable, Optional
-from multiprocessing import Process, Queue, Event
 
 try:
     from gammaloop import GammaLoopAPI
 except:
-    print("No gammaloop python API found.")
+    print("Failed to import gammaloop module.")
 try:
     import kaapos.samplers as ksamplers
-    import kaapos.integrand as kintegrand
+    import kaapos.integrands as kintegrands
 except:
-    print("No thermal integrand python module found.")
-from madnis.integrator import Integrand as MadnisIntegrand
+    print("Failed to import thermal integrand module.")
+try:
+    from madnis.integrator import Integrand as MadnisIntegrand
+except:
+    print("Failed to import madnis module.")
 from .parameterisation import LayerOutput, LayeredParameterisation, GraphProperties
 from .helpers import chunks
 
@@ -135,7 +138,7 @@ class GammaLoopIntegrand(Integrand):
             integrand_name=self.integrand_name,
             use_f128=self.use_f128,  discrete_dims=discrete_dims
         )
-        res = res.real if self.real else res.imag
+        res = res.real if self.eval_real_part else res.imag
         return torch.from_numpy(np.float64(res))
 
 
@@ -147,16 +150,16 @@ class KaapoIntegrand(Integrand):
 
     def __init__(self,
                  path_to_example: str,
-                 params: List[float] = [math.pi, 1.0, 1/math.pi],
+                 params: List[float] = [2*math.pi, math.pi, 1.0],
                  symbolica_integrand_kwargs: Dict[str, any] = {
-                     'force_rebuild': False,
+                     'force_rebuild': True,
                      'sum_orientations': True,
                      'runtime_summation': False,
                      'stability_tolerance': 1e-14,
                      'stability_abs_threshold': 1e-15,
                      'stability_abs_tolerance': 1e-15,
                      'escalate_large_weight_multiplier': 0.9,
-                     'n_shots': 3,
+                     'n_shots': 2,
                      'rotation_seed': 1337, },
                  symbolica_integrand_prec_kwargs: Dict[str, any] = {
                      'sum_orientations': True,
@@ -172,40 +175,42 @@ class KaapoIntegrand(Integrand):
         self.symbolica_integrand_kwargs = symbolica_integrand_kwargs
         self.symbolica_integrand_prec_kwargs = symbolica_integrand_prec_kwargs
         self.use_prec = use_prec
-        self.integrand_fast = kintegrand.SymbolicaIntegrand(
+        self.integrand_fast = kintegrands.SymbolicaIntegrand(
             path_to_example=self.path_to_example,
             params=self.params,
             **self.symbolica_integrand_kwargs,
         )
-        self.integrand_prec = kintegrand.SymbolicaIntegrandPrec(
+        self.integrand_prec = kintegrands.SymbolicaIntegrandPrec(
             path_to_example=self.path_to_example,
             params=self.params,
             **self.symbolica_integrand_prec_kwargs,
         )
-        self.stack = kintegrand.StableStack([
-            kintegrand.PrecisionLevel(
+        self.stack = kintegrands.StableStack([
+            kintegrands.PrecisionLevel(
                 integrand=self.integrand_fast, level_id=0),
-            kintegrand.PrecisionLevel(
+            kintegrands.PrecisionLevel(
                 integrand=self.integrand_prec, level_id=1),
         ])
         super().__init__(**kwargs)
 
     def _evaluate_batch(self, continuous: torch.Tensor, _: torch.Tensor) -> torch.Tensor:
-        if not self.use_prec:
-            raise NotImplementedError(
-                "Non-precision symbolica integrand not implemented for KaaposIntegrand.")
+            
 
         n_points = continuous.shape[0]
         loop_momenta = continuous.reshape(
             n_points, self.integrand_fast.n_loops, self.integrand_fast.dim).detach().cpu().numpy()
         input = ksamplers.SamplerResult(
             weight_array=np.ones((n_points, 1)),
-            jacobian_array=np.ones(n_points),
+            jacobian_array=np.ones((n_points)),
             loop_momentum_array=loop_momenta
         )
+        
+        if not self.use_prec:
+            output = self.integrand_fast.evaluate(input)
+            return torch.tensor(output.values)
+        
         output = self.stack.evaluate(input)
-
-        return output.values
+        return torch.tensor(output.values)
 
 
 class ParameterisedIntegrand:
@@ -232,6 +237,13 @@ class ParameterisedIntegrand:
         parameterised = self.param.parameterise(layer_input)
 
         return self.integrand.evaluate_batch(parameterised)
+    
+    def madnis_eval(self, x_all: torch.Tensor) -> torch.Tensor:
+        discrete, continuous = x_all.tensor_split([-self.continuous_dim], dim=1)
+        x_all = torch.hstack([continuous, discrete])
+        input = LayerOutput(x_all)
+        output = self.eval_integrand(input)
+        return output.x_all.flatten()
 
     def discrete_prior_prob_function(self, indices: torch.Tensor, dim: int = 0) -> torch.Tensor:
         if self.condition_integrand_first:
@@ -253,7 +265,7 @@ class ParameterisedIntegrand:
 
     def get_madnis_integrand(self) -> MadnisIntegrand:
         return MadnisIntegrand(
-            function=self.eval_integrand,
+            function=self.madnis_eval,
             input_dim=self.continuous_dim + len(self.discrete_dims),
             discrete_dims=self.discrete_dims,
             discrete_prior_prob_function=self.discrete_prior_prob_function,
@@ -281,6 +293,7 @@ class MPIntegrand:
                  condition_integrand_first: bool = False,
                  verbose: bool = False,
                  return_layeroutput: bool = False,):
+        ctx = mp.get_context("spawn")
 
         self.graph_properties = graph_properties
         self.param_kwargs = param_kwargs
@@ -289,8 +302,8 @@ class MPIntegrand:
         self.condition_integrand_first = condition_integrand_first
         self.verbose = verbose
         self.return_layeroutput = return_layeroutput
-        self.q_in, self.q_out, self.q_discr = [Queue() for _ in range(3)]
-        self.stop_event = Event()
+        self.q_in, self.q_out, self.q_discr = [ctx.Queue() for _ in range(3)]
+        self.stop_event = ctx.Event()
 
         worker_args = (
             (self.q_in, self.q_out, self.q_discr),
@@ -301,9 +314,9 @@ class MPIntegrand:
             self.condition_integrand_first,
         )
         for _ in range(self.n_cores):
-            Process(target=self.gammaloop_worker,
+            ctx.Process(target=self.gammaloop_worker,
                     args=worker_args,
-                    daemon=False).start()
+                    daemon=True).start()
         for core in range(self.n_cores):
             output = self.q_out.get()
             if output == "STARTED":
@@ -321,7 +334,7 @@ class MPIntegrand:
             print(f"discrete_dims: {self.discrete_dims}")
 
     @staticmethod
-    def gammaloop_worker(queues: Sequence[Queue],
+    def gammaloop_worker(queues: Sequence[mp.Queue],
                          stop_event,
                          graph_properties: GraphProperties,
                          param_kwargs: Dict[str, any],
@@ -336,6 +349,8 @@ class MPIntegrand:
         while not stop_event.is_set():
             try:
                 data = q_in.get(timeout=0.5)
+                if data == "STOP":
+                    break
             except:
                 continue
             job_type, chunk_id, args = data
@@ -371,15 +386,20 @@ class MPIntegrand:
         x_chunks = chunks(x_all, n_chunks)
 
         for chunk_id, args in enumerate(x_chunks):
-            self.q_in.put((job_type, chunk_id, args))
+            self.q_in.put((job_type, chunk_id, args), block=False)
 
         result_sorted = [None]*n_chunks
-        for _ in range(n_chunks):
+        idx = 0
+        while idx < n_chunks:
             if self.stop_event.is_set():
-                return
-            data = self.q_out.get()
+                break
+            try:
+                data = self.q_out.get()
+            except:
+                self.end()
             chunk_id, res = data
             result_sorted[chunk_id] = res
+            idx += 1
 
         output = LayerOutput.join(result_sorted, n_cores=self.n_cores)
 
@@ -393,6 +413,16 @@ class MPIntegrand:
             return output
 
         return output.x_all
+    
+    def madnis_eval(self, x_all: torch.Tensor) -> torch.Tensor:
+        discrete, continuous = x_all.tensor_split([-self.continuous_dim], dim=1)
+        x_all = torch.hstack([continuous, discrete])
+        input = LayerOutput(x_all)
+        output = self.eval_integrand(input)
+        if self.return_layeroutput:
+            return output.x_all.flatten()
+        
+        return output.flatten()
 
     def discrete_prior_prob_function(self, indices: torch.Tensor, dim: int = 0) -> torch.Tensor:
         job_type = "prior"
@@ -411,7 +441,7 @@ class MPIntegrand:
         result_sorted = [None]*n_chunks
         for _ in range(n_chunks):
             if self.stop_event.is_set():
-                return
+                break
             data = self.q_discr.get()
             chunk_id, res = data
             result_sorted[chunk_id] = res
@@ -420,21 +450,22 @@ class MPIntegrand:
 
     def get_madnis_integrand(self) -> MadnisIntegrand:
         return MadnisIntegrand(
-            function=self.eval_integrand,
+            function=self.madnis_eval,
             input_dim=self.continuous_dim + len(self.discrete_dims),
             discrete_dims=self.discrete_dims,
             discrete_prior_prob_function=self.discrete_prior_prob_function,
         )
 
     def end(self) -> None:
+        if self.stop_event.is_set():
+            return
+        
         self.stop_event.set()
-        """ 
         try:
             for _ in range(self.n_cores):
                 self.q_in.put("STOP")
         except:
             print(f"Queues have already been closed") 
-        """
 
         print(f"{self.identifier.upper()} has successfully terminated.")
 
