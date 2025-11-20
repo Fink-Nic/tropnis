@@ -17,5 +17,12 @@ from .parameterisation import Parameterisation, LayerOutput, LayeredParameterisa
 from kaapos.integrands import symbolica_integrand
 
 
-class Integrator:
-    pass
+class Sampler(ABC):
+    identifier = "ABCSampler"
+
+    def __init__(self,
+                 continuous_dim: int,
+                 discrete_dims: List[int] = [],
+                 identifier: Optional[str] = None,):
+        if identifier is not None:
+            self.identifier = identifier

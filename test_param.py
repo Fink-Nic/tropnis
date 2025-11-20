@@ -4,11 +4,15 @@ import time
 import toml
 
 import src.parameterisation as par
-from src.integrand import TestIntegrand
+from src.integrand import TestIntegrand, MPIntegrand, ParameterisedIntegrand
 from src.helpers import error_fmter
 
+dont_test_mp = False
 use_settings = False
 n_points = 10_000
+n_cores = 8
+n_points_mp = 50_000
+MAX_CHUNK_SIZE = 1_000
 settings_path = "dev_settings/1L_phys_layer_test.toml"
 
 torch.set_default_dtype(torch.float64)
@@ -47,69 +51,162 @@ if use_settings:
     Settings = SettingsParser(settings_path)
     graph_properties = Settings.get_graph_properties()
 
-integrand = TestIntegrand(continuous_dim=3*graph_properties.n_loops)
+kspace_integrand = TestIntegrand()
+xspace_integrand = TestIntegrand(const_f=True)
 
-time_last = time.time()
+time_last = time.perf_counter()
 
 spherical_kwargs = {"conformal_scale": 1.0,
-                    "identifier": "spherical",
                     "graph_properties": graph_properties,
                     "is_first_layer": True, }
 sph_param = par.SphericalParameterisation(**spherical_kwargs)
 inverse_spherical_kwargs = {"conformal_scale": 1.0,
-                            "identifier": "inverse spherical",
                             "graph_properties": graph_properties, }
 inv_sph_param = par.InverseSphericalParameterisation(
     **inverse_spherical_kwargs)
 neutral_kwargs = {"conformal_scale": 1.0,
-                  "identifier": "neutral",
                   "graph_properties": graph_properties,
                   "next_param": inv_sph_param,
                   "is_first_layer": True, }
 neutral_param = par.SphericalParameterisation(**neutral_kwargs)
 momtrop_kwargs = {"graph_properties": graph_properties,
-                  "identifier": "momtrop",
                   "is_first_layer": True, }
 momtrop_param = par.MomtropParameterisation(**momtrop_kwargs)
 kaapo_kwargs = {"graph_properties": graph_properties,
-                "identifier": "kaapo",
                 "is_first_layer": True,
                 "mu": 0.0001}
 kaapo_param = par.KaapoParameterisation(**kaapo_kwargs)
 print(f"Number of Momtrop contdim: {momtrop_param.layer_continuous_dim_in}")
 print(f"Initializing the Parameterisations took {
-    - time_last + (time_last := time.time()):.2f}s")
+    - time_last + (time_last := time.perf_counter()):.2f}s")
+
+with open(settings_path, 'r') as f:
+    settings = toml.load(f)
+param_settings = settings['parameterisation']
+layered_param = par.LayeredParameterisation(graph_properties, param_settings)
+discrete = -1*torch.ones(n_points).reshape(-1, 1)
 
 hline = "----------------------------------------------------------------------------"
-
-for param in [sph_param, neutral_param, momtrop_param, kaapo_param]:
+params = [sph_param, neutral_param, momtrop_param, kaapo_param, layered_param]
+integrands = [kspace_integrand, xspace_integrand,
+              kspace_integrand, kspace_integrand, kspace_integrand]
+for param, grand in zip(params, integrands):
     param: par.Parameterisation
     print(hline)
     print(f"Testing {param.identifier.upper()}:")
     print(hline)
-    n_continuous = param.chain_continuous_dim_in
+    try:
+        n_continuous = param.chain_continuous_dim_in
+    except:
+        n_continuous = param.continuous_dim
     xs = torch.rand(size=(n_points, n_continuous))
+    if param.identifier in ['momtrop', 'layered parameterisation']:
+        xs = torch.hstack([xs, discrete])
     input = par.LayerOutput(xs)
-    output = integrand.evaluate_batch(param.parameterise(input))
+    time_last = time.perf_counter()
+    output = grand.evaluate_batch(param.parameterise(input))
+    print(f"Evaluating {param.identifier.upper()} took {
+        - time_last + (time_last := time.perf_counter()):.4f}s")
     res, err = output.x_all.mean().item(), output.x_all.std().item() / n_points**0.5
     print(f"Integration result: {res:.4f} +- {err:.4f}")
     # print(f"Integration result: {error_fmter(res, err)}")
-    print(f"Timing: {output.get_processing_times()}")
+    timings = [f"{key}: {value:.4f}s" for key,
+               value in output.get_processing_times().items()]
+    print(f"Timing: \n{timings}")
 
 print(hline)
 print("Testing LayerParameterisation")
 print(hline)
 
-with open(settings_path, 'r') as f:
-    settings = toml.load(f)
+print(hline)
+print("Testing discrete prior probability function.")
+print(hline)
 
-param_settings = settings["parameterisation"]
+print("Matching discrete dims:")
+n_discrete = len(layered_param.discrete_dims)
+indices = torch.arange(n_discrete).reshape(1, -1)
+indices = torch.tile(indices, (3, 1))
+print(f"{indices=}")
+print(f"{layered_param.discrete_prior_prob_function(indices, n_discrete - 1)}")
 
-layered_param = par.LayeredParameterisation(graph_properties, param_settings)
-n_continuous = layered_param.continuous_dim
-xs = torch.rand(size=(n_points, n_continuous))
-input = par.LayerOutput(xs)
-output = integrand.evaluate_batch(layered_param.parameterise(input))
-res, err = output.x_all.mean().item(), output.x_all.std().item() / n_points**0.5
-# print(f"Integration result: {error_fmter(res, err)}")
-print(f"Timing: {output.get_processing_times()}")
+print("Only one:")
+print(
+    f"{layered_param.discrete_prior_prob_function(indices[:, :1] + torch.arange(3).reshape(-1, 1), 0)}")
+
+print("Empty indices:")
+indices = torch.Tensor([]).reshape(1, -1)
+print(f"{layered_param.discrete_prior_prob_function(indices, -1)}")
+
+if dont_test_mp:
+    quit()
+
+
+def main() -> None:
+    import signal
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    try:
+        print(hline)
+        print("Testing multiprocessing (parameterised) integrand.")
+        print(hline)
+        with open(settings_path, 'r') as f:
+            settings = toml.load(f)
+
+        param_settings = settings['parameterisation']
+        integrand_kwargs = {
+            'integrand_type': 'test',
+            'const_f': False,
+        }
+        integrand = MPIntegrand(
+            graph_properties,
+            param_settings,
+            integrand_kwargs,
+            n_cores=n_cores,
+            verbose=False,
+            return_layeroutput=True,
+        )
+        integrand.MAX_CHUNK_SIZE = MAX_CHUNK_SIZE
+        n_continuous = integrand.continuous_dim
+        continuous = torch.rand(size=(n_points_mp, n_continuous))
+        discrete = -1*torch.ones(n_points_mp).reshape(-1, 1)
+        xs = torch.hstack([continuous, discrete])
+        input = par.LayerOutput(xs)
+        for _ in range(3):
+            time_last = time.perf_counter()
+            output = integrand.eval_integrand(input)
+            output: par.LayerOutput
+            timings = [f"{key}: {value:.4f}s" for key,
+                       value in output.get_processing_times().items()]
+            print(f"Timing: \n{timings}")
+            print(f"Evaluating the integrand took {
+                - time_last + (time_last := time.perf_counter()):.4f}s")
+        x_all = output.x_all
+        res, err = x_all.mean().item(), x_all.std().item() / n_points_mp**0.5
+        print(f"Integration result: {res:.4f} +- {err:.4f}")
+        # print(f"Integration result: {error_fmter(res, err)}")
+
+        print(hline)
+        print("Testing discrete prior probability function.")
+        print(hline)
+
+        print("Matching discrete dims:")
+        n_discrete = len(integrand.discrete_dims)
+        indices = torch.arange(n_discrete).reshape(1, -1)
+        indices = torch.tile(indices, (3, 1))
+        print(f"{indices=}")
+        print(f"{integrand.discrete_prior_prob_function(indices, n_discrete - 1)}")
+
+        print("Only one:")
+        print(
+            f"{integrand.discrete_prior_prob_function(indices[:, :1] + torch.arange(3).reshape(-1, 1), 0)}")
+
+        print("Empty indices:")
+        indices = torch.Tensor([]).reshape(1, -1)
+        print(f"{integrand.discrete_prior_prob_function(indices, -1)}")
+
+    except KeyboardInterrupt:
+        print("\nCaught KeyboardInterrupt — stopping workers.")
+        integrand.end()
+
+
+if __name__ == "__main__":
+    main()

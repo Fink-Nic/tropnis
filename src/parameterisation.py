@@ -4,7 +4,7 @@ import numpy as np
 from time import perf_counter
 from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Sequence
 
 import momtrop
 from madnis.integrator import Integrand as MadnisIntegrand
@@ -87,50 +87,73 @@ class LayerOutput:
         self.timing.update({identifier: perf_counter()})
         self.num_processing_steps += 1
 
-    def get_processing_times(self) -> Dict[str, float]:
+    def get_processing_times(self, mu_s_per_point: bool = False) -> Dict[str, float]:
         """
+        Args:
+            mu_s_per_point: If True, will return processing times in microseconds per 
+            evaluated point.
         Returns:
             Processing time spent in each layer, in seconds.
         """
         self.timing: Dict[str, float]
         last_timestamp = self.timing['init']
         processing_times: Dict = {}
+        total_time = 0.0
         for identifier in self.timing.keys():
-            if identifier == "init":
+            if identifier in ['init', 'total']:
                 continue
-
             curr_timestamp = self.timing[identifier]
-            processing_times[identifier] = curr_timestamp - last_timestamp
+            processing_time = curr_timestamp - last_timestamp
+            if mu_s_per_point:
+                processing_time /= len(self.x_all) * 1E6
+            processing_times[identifier] = processing_time
+            total_time += processing_time
             last_timestamp = curr_timestamp
+        processing_times['total'] = total_time
 
         return processing_times
+
+    @staticmethod
+    def join(instances: Sequence['LayerOutput'], n_cores: int = 1):
+        if len(instances) < 1:
+            return []
+
+        joined_x_all = torch.vstack([i.x_all for i in instances])
+        joined_timings = [i.get_processing_times() for i in instances]
+        joined_outputs = LayerOutput(joined_x_all)
+        last_timestamp = joined_outputs.timing['init']
+        for identifier in joined_timings[0].keys():
+            curr_p_time = sum(
+                [t[identifier] for t in joined_timings]) / n_cores
+            joined_outputs.timing[identifier] = last_timestamp + curr_p_time
+            last_timestamp += curr_p_time
+
+        return joined_outputs
 
 
 class Parameterisation(ABC):
     N_SPATIAL_DIMS = 3
     DIM_FROM_JACOBIAN = 1
+    identifier = "ABCParameterisation"
 
     def __init__(self,
-                 identifier: str,
                  graph_properties: GraphProperties,
-                 next_param: Optional = None,
+                 identifier: Optional[str] = None,
+                 next_param: Optional['Parameterisation'] = None,
                  is_first_layer: bool = False,
                  ):
-        self.identifier = identifier
+        if identifier is not None:
+            self.identifier = identifier
         self.graph_properties = graph_properties
-        self.next_param: Parameterisation = next_param
+        self.next_param = next_param
         self.is_first_layer = is_first_layer
 
         self.layer_continuous_dim_in = self._layer_continuous_dim_in()
         self.layer_continuous_dim_out = self._layer_continuous_dim_out()
-        self.layer_continuous_dim_consumed = self.layer_continuous_dim_in - \
-            self.layer_continuous_dim_out
         self.layer_discrete_dims = self._layer_discrete_dims()
         self.layer_num_discrete_dims = len(self.layer_discrete_dims)
 
         self.chain_continuous_dim_in = self.get_chain_continuous_dim()
-        self.chain_continuous_dim_out = self.chain_continuous_dim_in - \
-            self.layer_continuous_dim_consumed
         self.chain_discrete_dims = self.get_chain_discrete_dims()
 
     @abstractmethod
@@ -167,15 +190,20 @@ class Parameterisation(ABC):
         """
         Args:
             indices: indices of the discrete channel
-            dim: current layer of generated indices
+            dim: current index on dim=1 of generated indices
         Returns:
-            torch tensor of shape (indices.shape[0],): probability of the prior distribution for given indices
+            torch tensor of shape (indices.shape[0], self.layer_num_discrete_dims): 
+            probability of the prior distribution for given indices.
+            Default is flat probability distribution, 
+            zero if indices.shape[0] = self.layer_num_discrete_dims
         """
-        layer_result = self._layer_prior_prob_function(indices, dim)
-        if self.next_param is None:
-            return layer_result
+        if dim < self.layer_num_discrete_dims or self.next_param is None:
+            return self._layer_prior_prob_function(indices.long())
 
-        return layer_result * self.next_param.discrete_prior_prob_function(indices, dim)
+        indices = indices[:, self.layer_num_discrete_dims:]
+        dim -= self.layer_num_discrete_dims
+
+        return self.next_param.discrete_prior_prob_function(indices, dim)
 
     def get_chain_discrete_dims(self) -> List[int]:
         """
@@ -197,7 +225,9 @@ class Parameterisation(ABC):
         if self.next_param is None:
             return self.layer_continuous_dim_in
 
-        return self.layer_continuous_dim_consumed + self.next_param.get_chain_continuous_dim()
+        layer_dim = self.layer_continuous_dim_in - self.layer_continuous_dim_out
+
+        return layer_dim + self.next_param.get_chain_continuous_dim()
 
     def _to_layer_input(self, input: LayerOutput
                         ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -242,7 +272,7 @@ class Parameterisation(ABC):
 
         Args:
             layer_input: LayerOutput of the previous layer
-            param_output: x_all Tensor generated by the parameterisation step of the current layer
+            *param_output: Output generated by the parameterisation step of the current layer
         Returns:
             LayerOutput
         """
@@ -274,8 +304,19 @@ class Parameterisation(ABC):
 
         return layer_input
 
-    def _layer_prior_prob_function(self, indices: torch.Tensor, dim: int = 0) -> torch.Tensor:
-        return torch.ones(len(indices))
+    def _layer_prior_prob_function(self, indices: torch.Tensor) -> torch.Tensor:
+        if indices.shape[1] == self.layer_num_discrete_dims:
+            return torch.zeros_like(indices)
+
+        norm_factor = self.layer_num_discrete_dims - indices.shape[1]
+        prior = torch.ones((len(indices), self.layer_num_discrete_dims))
+        if indices.shape[1] == 0:
+            return prior / norm_factor
+
+        rows = torch.arange(len(indices)).unsqueeze(1)
+        prior[rows, indices] = 0
+
+        return prior / norm_factor
 
     def _layer_discrete_dims(self) -> List[int]:
         """
@@ -287,17 +328,19 @@ class Parameterisation(ABC):
 
     def _layer_continuous_dim_in(self) -> int:
         """
+        Intended to be used to initialize the value for self.layer_continuous_dim_in.
+
         Returns:
             The continuous dimension of the input of this layer in the parameterisation chain.
-            Intended to be used to initialize the value for self.continuous_dim_in
         """
         return self.N_SPATIAL_DIMS*self.graph_properties.n_loops
 
     def _layer_continuous_dim_out(self) -> int:
         """
+        Intended to be used to initialize the value for self.layer_continuous_dim_out.
+
         Returns:
             The continuous dimension of the output of this layer in the parameterisation chain.
-            Intended to be used to initialize the value for self.continuous_dim_in
         """
         return self.N_SPATIAL_DIMS*self.graph_properties.n_loops
 
@@ -311,6 +354,8 @@ class Parameterisation(ABC):
 
 
 class LayeredParameterisation:
+    identifier = "layered parameterisation"
+
     def __init__(self, graph_properties: GraphProperties,
                  param_settings: Dict[str, Dict],):
         param_layers: List[Parameterisation] = []
@@ -329,7 +374,7 @@ class LayeredParameterisation:
                            "next_param": next_param,
                            "graph_properties": graph_properties, })
 
-            match param_type:
+            match param_type.lower():
                 case "momtrop":
                     p = MomtropParameterisation(**kwargs)
                 case "spherical":
@@ -355,6 +400,8 @@ class LayeredParameterisation:
 
 
 class MomtropParameterisation(Parameterisation):
+    identifier = "momtrop"
+
     def __init__(self, **kwargs: Dict[str, any]):
         self.graph_properties: GraphProperties = kwargs["graph_properties"]
         mt_edges = [
@@ -374,17 +421,20 @@ class MomtropParameterisation(Parameterisation):
         self.momtrop_sampler_settings = momtrop.Settings(False, False)
         super().__init__(**kwargs)
 
-    def _layer_parameterise(self, continuous: torch.Tensor, discrete: torch.Tensor
+    def _layer_parameterise(self, continuous: torch.Tensor, discrete: torch.Tensor,
                             ) -> Tuple[torch.Tensor, torch.Tensor]:
+        # For naive sampler implementation
+        if discrete.shape[1] > 0:
+            if discrete[0, 0] < 0:
+                samples = self.momtrop_sampler.sample_batch(
+                    continuous.tolist(), self.momtrop_edge_data, self.momtrop_sampler_settings)
+                jacobians = torch.Tensor(samples.jacobians).reshape(-1, 1)
+                loop_momenta = torch.Tensor(
+                    samples.loop_momenta).reshape(len(continuous), -1)
 
-        if discrete.shape[1] == 0:
-            full_graph = torch.arange(self.graph_properties.n_edges)
-            discrete = torch.tile(
-                full_graph, (len(continuous), 1)).tolist()
-        else:
-            discrete = [
-                self._get_graph_from_edges_removed(edges_removed) for edges_removed in discrete.tolist()
-            ]
+                return jacobians, loop_momenta
+
+        discrete = self._get_graph_from_edges_removed(discrete)
         samples = self.momtrop_sampler.sample_batch(
             continuous.tolist(), self.momtrop_edge_data, self.momtrop_sampler_settings, discrete)
 
@@ -394,24 +444,34 @@ class MomtropParameterisation(Parameterisation):
 
         return jacobians, loop_momenta
 
-    def _get_graph_from_edges_removed(self, edges_removed: List[int] | None = None) -> List[int]:
+    def _get_graph_from_edges_removed(self, edges_removed: Optional[torch.Tensor] = None
+                                      ) -> List[List[int]]:
         """
         Args:
             edges_removed: List of the edge indices that have already been forced
         Returns:
             List of shape (n_edges,) that appends the as-yet unforced edges to edges_removed
         """
-        full_graph = list(range(self.graph_properties.n_edges))
+        full_graph = torch.arange(self.layer_num_discrete_dims)
         if edges_removed is None:
-            return full_graph
+            return [full_graph.tolist()]
 
-        for edge in edges_removed:
-            full_graph[edge] = None
+        full_graph = torch.tile(full_graph, (len(edges_removed), 1))
+        if edges_removed.shape[1] == 0:
+            return full_graph.tolist()
 
-        return edges_removed + [edge for edge in full_graph if edge is not None]
+        mask = torch.nn.functional.one_hot(
+            edges_removed, num_classes=self.layer_num_discrete_dims)
+        # Append the edges that are not in discrete, meaning where onehot is zero
+        remaining_edges = full_graph[mask == 0].reshape(len(edges_removed), -1)
 
-    def _layer_prior_prob_function(self, indices: torch.Tensor, _: int = 0) -> torch.Tensor:
-        return torch.tensor(self.sampler.predict_discrete_probs(indices.tolist()))
+        return torch.hstack([edges_removed, remaining_edges]).tolist()
+
+    """ def _layer_prior_prob_function(self, indices: torch.Tensor) -> torch.Tensor:
+        rust_result = self.momtrop_sampler.predict_discrete_probs(
+            indices.tolist())")
+
+        return torch.tensor(rust_result) """
 
     def _layer_continuous_dim_in(self) -> int:
         return self.momtrop_sampler.get_dimension()
@@ -422,6 +482,8 @@ class MomtropParameterisation(Parameterisation):
 
 
 class SphericalParameterisation(Parameterisation):
+    identifier = "spherical"
+
     def __init__(self,
                  conformal_scale: float,
                  origins: torch.Tensor | None = None,
@@ -470,6 +532,8 @@ class SphericalParameterisation(Parameterisation):
 
 
 class InverseSphericalParameterisation(Parameterisation):
+    identifier = "inverse spherical"
+
     def __init__(self,
                  conformal_scale: float,
                  origins: Optional[torch.Tensor] = None,
@@ -521,6 +585,8 @@ class InverseSphericalParameterisation(Parameterisation):
 
 
 class KaapoParameterisation(Parameterisation):
+    identifier = "kaapo"
+
     def __init__(self, mu: float = torch.pi, a: float = 0.2, b: float = 1.0, **kwargs):
         self.mu = mu
         self.a = a
